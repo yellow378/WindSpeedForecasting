@@ -29,20 +29,33 @@ class Model(nn.Module):
         self.Linear_Cross = nn.ModuleList()
         self.Linear_Decoder = nn.ModuleList()
 
+        # [batch_size, seq_len, enc_in]
         self.Linear_MultiVariable.append(nn.Linear(self.enc_in,self.d_model))
+        # [[batch_size, seq_len, d_model]]
+        self.Linear_MultiVariable.append(nn.BatchNorm1d(self.seq_len))
         self.Linear_MultiVariable.append(nn.LeakyReLU())
+        
 
+        # permute [batch_size, d_model, seq_len]
         self.Linear_Time.append(nn.Linear(self.seq_len,configs.n_heads//4))
+        # [batch_size, d_model, configs.n_heads//4]
         self.Linear_Time.append(nn.LeakyReLU())
         self.Linear_Time.append(nn.Linear(configs.n_heads//4,configs.n_heads))
+        # [batch_size, d_model, configs.n_heads]
+        self.Linear_Time.append(nn.BatchNorm1d(self.d_model))
         self.Linear_Time.append(nn.Dropout(configs.dropout))
         self.Linear_Time.append(nn.LeakyReLU())
     
+        # [batch_size, d_model, configs.n_heads]
+        # reshape [batch_size, d_model*configs.n_heads]
         self.Linear_Cross.append(nn.Linear(self.d_model*configs.n_heads, self.pred_len*2))
-        self.Linear_Cross.append(nn.LeakyReLU())
+        # [batch_size, self.pred_len*2]
         self.Linear_Cross.append(nn.Dropout(configs.dropout))
-
+        self.Linear_Cross.append(nn.LeakyReLU())
+        
+        # [batch_size, pred_len, d_model]
         self.Linear_Decoder.append(nn.Linear(2, self.c_out))
+        self.Linear_Decoder.append(nn.BatchNorm1d(self.pred_len))
 
     def encoder(self, x):
         # [batch_size, seq_len, enc_in]
@@ -62,11 +75,11 @@ class Model(nn.Module):
             out = layer(out)
         out = out.reshape(originShape[0],self.pred_len, 2)
 
-        # [batch_size, pred_len, d_model]
+        # [batch_size, pred_len, 2]
         return out
 
     def decoder(self, x):
-        # [batch_size, pred_len, d_model]
+        # [batch_size, pred_len, 2]
         for layer in self.Linear_Decoder:
             x = layer(x)
 
