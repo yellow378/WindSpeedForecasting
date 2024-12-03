@@ -25,3 +25,6 @@ mse:1.5637305974960327, mae:0.9957477450370789
 long_term_forecast_test_LightTime_custom_ftS_sl432_ll48_pl36_dm126_nh8_el2_dl1_df2048_fc1_ebtimeF_dtTrue_test_0  
 mse:0.39273253083229065, mae:0.4960252046585083
 
+long_term_forecast_test_LightTime_custom_ftS_sl432_ll48_pl36_dm32_nh8_el2_dl1_df2048_fc1_ebtimeF_dtTrue_test_0  
+mse:0.3808930516242981, mae:0.49132341146469116
+
