@@ -16,7 +16,7 @@ class Model(nn.Module):
         self.stride = configs.stride
         self.patch_len = configs.patch_len
         self.padding = self.stride
-        self.patch_num = self.seq_len // self.stride
+        self.patch_num = (self.seq_len+self.stride*2 - self.patch_len) // self.stride
 
         if self.task_name == 'classification' or self.task_name == 'anomaly_detection' or self.task_name == 'imputation':
             self.pred_len = configs.seq_len
@@ -26,8 +26,15 @@ class Model(nn.Module):
         
         # TODO: 趋势分解？
 
+
+        # TODO: Patch前增加一个一维卷积？
+
         # Patch
         self.patch_embedding = PatchEmbedding(self.d_model, self.patch_len, self.stride, self.padding, configs.dropout)
+        
+
+        # TODO: 外生变量的运算
+
         
         # 线性运算
         self.Linear_Time = nn.ModuleList()
@@ -52,6 +59,8 @@ class Model(nn.Module):
     def encoder(self, x):
         # [batch_size * enc_in, patch_num, d_model]
         out = x.permute(0, 2, 1)
+        # print(out.shape)
+        # print(self.patch_num)
         for layer in self.Linear_Time:
             out = layer(out)
         out = out.permute(0, 2, 1)

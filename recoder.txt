@@ -6,3 +6,84 @@ python run.py --task_name long_term_forecast --is_training 1 --model_id test --m
 mse:0.3808930516242981, mae:0.49132341146469116
 问题：趋势总是向下的,或者是向上的
 
+commit 4e8d4d4af1e68f463dd2be91285dcddf7ae57277 Patch
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 432  --pred_len 36 --d_model 32 --use_gpu True --batch_size 64 --enc_in 1 --dec_in 1 --c_out 1 --train_epochs 10 --learning_rate 0.001 --patience 3
+mse:0.34195345640182495, mae:0.4231172800064087
+
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 432  --pred_len 36 --d_model 32 --use_gpu True --batch_size 64 --enc_in 1 --dec_in 1 --c_out 1 --train_epochs 10 --learning_rate 0.0001 --patience 3
+mse:0.5308170318603516, mae:0.543242335319519
+
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 432  --pred_len 36 --d_model 32 --use_gpu True --batch_size 64 --enc_in 1 --dec_in 1 --c_out 1 --train_epochs 50 --learning_rate 0.0001 --patience 10
+mse:0.5777789354324341, mae:0.5694664120674133
+
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 432  --pred_len 36 --d_model 64 --use_gpu True --batch_size 64 --enc_in 1 --dec_in 1 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3
+mse:0.3435371518135071, mae:0.42431625723838806
+
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 432  --pred_len 36 --d_model 32 --n_heads 2 --use_gpu True --batch_size 64 --enc_in 1 --dec_in 1 --c_out 1 --train_epochs 15 --learnin
+g_rate 0.001 --patience 3
+mse:0.3581647276878357, mae:0.434478223323822
+
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 432  --pred_len 36 --d_model 32 --n_heads 1 --use_gpu True --batch_size 64 --enc_in 1 --dec_in 1 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3
+mse:0.4575238525867462, mae:0.49692532420158386
+
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 432  --pred_len 36 --d_model 32 --n_heads 4 --use_gpu True --batch_size 64 --enc_in 1 --dec_in 1 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3
+mse:0.35774508118629456, mae:0.4400738477706909
+
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 432  --pred_len 36 --d_model 64 --n_heads 4 --use_gpu True --batch_size 64 --enc_in 1 --dec_in 1 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3
+mse:0.33935409784317017, mae:0.42064785957336426
+
+*python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 432  --pred_len 36 --d_model 128 --n_heads 4 --use_gpu True --batch_size 64 --enc_in 1 --dec_in 1 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3
+mse:0.33502936363220215, mae:0.4190385341644287
+
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 432  --pred_len 36 --d_model 512 --n_heads 4 --use_gpu True --batch_size 64 --enc_in 1 --dec_in 1 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3
+mse:0.3528801202774048, mae:0.42640936374664307
+
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 432  --pred_len 36 --d_model 512 --n_heads 8 --use_gpu True --batch_size 64 --enc_in 1 --dec_in 1 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3
+mse:0.33525845408439636, mae:0.41637590527534485
+
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 432  --pred_len 36 --d_model 256 --n_heads 4 --use_gpu True --batch_size 64 --enc_in 1 --dec_in 1 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3
+mse:0.35907649993896484, mae:0.4330955445766449
+
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features MS --target Wspd --seq_len 432  --pred_len 36 --d_model 128 --n_heads 4 --use_gpu True --batch_size 64 --enc_in 10 --dec_in 10 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3
+mse:0.33819249272346497, mae:0.4231143593788147
+
+问题：高于一个阈值，向下 低于阈值，向上
+
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb2.csv --features S --target Wspd --seq_len 432  --pred_len 36 --d_model 128 --n_heads 4 --use_gpu True --batch_size 64 --enc_in 1 --dec_in 1 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3
+mse:0.31914424896240234, mae:0.40783947706222534
+
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 432  --pred_len 36 --d_model 1024 --n_heads 4 --use_gpu True --batch_size 64 --enc_in 1 --dec_in 1 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3
+mse:0.33917054533958435, mae:0.4228234589099884
+
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 432  --pred_len 36 --d_model 128 --n_heads 4 --use_gpu True --batch_size 64 --enc_in 1 --dec_in 1 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3 --patch_len 72 --stride 18
+mse:0.3358326852321625, mae:0.42195793986320496
+
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 432  --pred_len 36 --d_model 128 --n_heads 4 --use_gpu True --batch_size 64 --enc_in 1 --dec_in 1 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3 --patch_len 72 --stride 36
+mse:0.34844958782196045, mae:0.42690691351890564
+
+*python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 432  --pred_len 36 --d_model 128 --n_heads 4 --use_gpu True --batch_size 64 --enc_in 1 --dec_in 1 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3 --patch_len 72 --stride 9
+mse:0.3348276913166046, mae:0.4181535840034485
+
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 432  --pred_len 36 --d_model 128 --n_heads 4 --use_gpu True --batch_size 64 --enc_in 1 --dec_in 1 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3 --patch_len 72 --stride 3
+mse:0.34224656224250793, mae:0.4253966510295868
+
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 432  --pred_len 36 --d_model 128 --n_heads 4 --use_gpu True --batch_size 64 --enc_in 1 --dec_in 1 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3 --patch_len 36 --stride 9
+mse:0.3738824427127838, mae:0.44172996282577515
+
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 432  --pred_len 36 --d_model 128 --n_heads 4 --use_gpu True --batch_size 64 --enc_in 1 --dec_in 1 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3 --patch_len 144 --stride 9
+mse:0.3357481062412262, mae:0.4211277663707733
+
+**python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 432  --pred_len 36 --d_model 128 --n_heads 4 --use_gpu True --batch_size 64 --enc_in 1 --dec_in 1 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3 --patch_len 72 --stride 9
+mse:0.3319370746612549, mae:0.4164305627346039
+
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 432  --pred_len 36 --d_model 128 --n_heads 4 --use_gpu True --batch_size 64 --enc_in 1 --dec_in 1 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3
+mse:0.34219783544540405, mae:0.4232514500617981
+
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 192  --pred_len 36 --d_model 128 --n_heads 4 --use_gpu True --batch_size 64 --enc_in 1 --dec_in 1 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3
+mse:0.34611696004867554, mae:0.4174994230270386
+
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 192  --pred_len 36 --d_model 128 --n_heads 4 --use_gpu True --batch_size 64 --enc_in 1 --dec_in 1 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3
+mse:0.3530454635620117, mae:0.4214770793914795
+
+
+
