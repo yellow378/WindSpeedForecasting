@@ -85,5 +85,11 @@ mse:0.34611696004867554, mae:0.4174994230270386
 python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 192  --pred_len 36 --d_model 128 --n_heads 4 --use_gpu True --batch_size 64 --enc_in 1 --dec_in 1 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3
 mse:0.3530454635620117, mae:0.4214770793914795
 
+conv1d
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 432  --pred_len 36 --d_model 128 --n_heads 4 --use_gpu True --batch_size 64 --enc_in 1 --dec_in 1 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3 --patch_len 72 --stride 9
+mse:0.3569653034210205, mae:0.4384725093841553
+
+
+
 
 

@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from layers.Embed import PatchEmbedding
+from layers.Autoformer_EncDec import series_decomp
 
 class Model(nn.Module):
 
@@ -24,13 +25,18 @@ class Model(nn.Module):
         else:
             self.pred_len = configs.pred_len
         
-        # TODO: 趋势分解？
+        # 趋势分解？
+        self.decompsition = series_decomp(configs.moving_avg)
+        self.Linear_Trend_Embeding = nn.Linear(1,self.d_model)
 
 
-        # TODO: Patch前增加一个一维卷积？
+        # Patch前增加一个一维卷积？
+        self.conv = nn.Conv1d(1,1,9,1,4)
+        self.conv_trend = nn.Conv1d(1,1,9,1,4)
 
         # Patch
         self.patch_embedding = PatchEmbedding(self.d_model, self.patch_len, self.stride, self.padding, configs.dropout)
+        self.patch_embedding_trend = PatchEmbedding(self.d_model, self.patch_len, self.stride, self.padding, configs.dropout)
         
 
         # TODO: 外生变量的运算
@@ -38,8 +44,6 @@ class Model(nn.Module):
         
         # 线性运算
         self.Linear_Time = nn.ModuleList()
-        self.Linear_Decoder = nn.ModuleList()
-
         # [batch_size * enc_in, patch_num, d_model]
         # permute [batch_size * enc_in, d_model, patch_num]
         self.Linear_Time.append(nn.Linear(self.patch_num,configs.n_heads))
@@ -50,8 +54,22 @@ class Model(nn.Module):
         self.Linear_Time.append(nn.BatchNorm1d(self.d_model))
         self.Linear_Time.append(nn.Dropout(configs.dropout))
         self.Linear_Time.append(nn.LeakyReLU())
+
+        # 线性运算 Trend
+        self.Linear_Time_Trend = nn.ModuleList()
+        # [batch_size * enc_in, patch_num, d_model]
+        # permute [batch_size * enc_in, d_model, patch_num]
+        self.Linear_Time_Trend.append(nn.Linear(self.patch_num,2))
+        # [batch_size * enc_in, d_model, n_heads]
+        self.Linear_Time_Trend.append(nn.LeakyReLU())
+        self.Linear_Time_Trend.append(nn.Linear(2,self.pred_len))
+        # # [batch_size * enc_in, d_model, pred_len]
+        # self.Linear_Time_Trend.append(nn.BatchNorm1d(self.d_model))
+        self.Linear_Time_Trend.append(nn.Dropout(configs.dropout))
+        self.Linear_Time_Trend.append(nn.LeakyReLU())
     
         
+        self.Linear_Decoder = nn.ModuleList()
         # [batch_size, pred_len, d_model]
         self.Linear_Decoder.append(nn.Linear(self.d_model, self.c_out))
         self.Linear_Decoder.append(nn.BatchNorm2d(self.enc_in))
@@ -86,9 +104,22 @@ class Model(nn.Module):
             torch.var(x_enc, dim=1, keepdim=True, unbiased=False) + 1e-5)
         x_enc /= stdev
 
+        x_enc, trend = self.decompsition(x_enc)
+        trend_out = trend.permute(0,2,1)
+        trend_out = self.conv_trend(trend_out)
+        trend_out,n_vars = self.patch_embedding_trend(trend_out)
+        trend_out = trend_out.permute(0, 2, 1)
+        for layer in self.Linear_Time_Trend:
+            trend_out = layer(trend_out)
+        trend_out = trend_out.permute(0, 2, 1)
+        trend_out = torch.reshape(
+            trend_out, (-1, n_vars, trend_out.shape[-2], trend_out.shape[-1]))
+        
+
         # do patching and embedding
         x_enc = x_enc.permute(0, 2, 1)
-        enc_out, n_vars = self.patch_embedding(x_enc)
+        enc_out = self.conv(x_enc)
+        enc_out, n_vars = self.patch_embedding(enc_out)
         # [batch_sizes * enc_in, patch_num, d_model]
 
         # Encoder
@@ -98,6 +129,7 @@ class Model(nn.Module):
             enc_out, (-1, n_vars, enc_out.shape[-2], enc_out.shape[-1]))
         # [batch_size, nvars, pred_len, d_model]]
 
+        enc_out = enc_out + trend_out
         # Decoder
         dec_out = self.decoder(enc_out)
         # [batch_size, nvars, pred_len, c_out]]
