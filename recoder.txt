@@ -4,4 +4,5 @@ mse:0.39273253083229065, mae:0.4960252046585083
 
 python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 432  --pred_len 36 --d_model 32 --use_gpu True --batch_size 64 --enc_in 1 --dec_in 1 --c_out 1 --train_epochs 10 --learning_rate 0.001 --patience 3
 mse:0.3808930516242981, mae:0.49132341146469116
-问题：趋势总是向下的
+问题：趋势总是向下的,或者是向上的
+

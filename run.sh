@@ -1,2 +1,2 @@
 #!/usr/bin/zsh
-python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features MS --target Wspd --seq_len 432  --pred_len 36 --d_model 1024 --use_gpu True --batch_size 64 --enc_in 10 --dec_in 10 --c_out 1 --train_epochs 100 --learning_rate 0.001 --patience 10
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features MS --target Wspd --seq_len 432  --pred_len 36 --d_model 1024 --use_gpu True --batch_size 8 --enc_in 10 --dec_in 10 --c_out 1 --train_epochs 100 --learning_rate 0.001 --patience 10 --n_heads 8
