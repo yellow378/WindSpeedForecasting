@@ -25,12 +25,11 @@ class Model(nn.Module):
         else:
             self.pred_len = configs.pred_len
         
-        # 趋势分解？
+        # 趋势分解
         self.decompsition = series_decomp(configs.moving_avg)
-        self.Linear_Trend_Embeding = nn.Linear(1,self.d_model)
 
 
-        # Patch前增加一个一维卷积？
+        # Patch前增加一个一维卷积
         self.conv = nn.Conv1d(1,1,9,1,4)
         self.conv_trend = nn.Conv1d(1,1,9,1,4)
 
@@ -54,19 +53,6 @@ class Model(nn.Module):
         self.Linear_Time.append(nn.BatchNorm1d(self.d_model))
         self.Linear_Time.append(nn.Dropout(configs.dropout))
         self.Linear_Time.append(nn.LeakyReLU())
-
-        # 线性运算 Trend
-        self.Linear_Time_Trend = nn.ModuleList()
-        # [batch_size * enc_in, patch_num, d_model]
-        # permute [batch_size * enc_in, d_model, patch_num]
-        self.Linear_Time_Trend.append(nn.Linear(self.patch_num,2))
-        # [batch_size * enc_in, d_model, n_heads]
-        self.Linear_Time_Trend.append(nn.LeakyReLU())
-        self.Linear_Time_Trend.append(nn.Linear(2,self.pred_len))
-        # # [batch_size * enc_in, d_model, pred_len]
-        # self.Linear_Time_Trend.append(nn.BatchNorm1d(self.d_model))
-        self.Linear_Time_Trend.append(nn.Dropout(configs.dropout))
-        self.Linear_Time_Trend.append(nn.LeakyReLU())
     
         
         self.Linear_Decoder = nn.ModuleList()
@@ -86,6 +72,7 @@ class Model(nn.Module):
         # [batch_size * enc_in, pred_len, d_model]
         return out
 
+
     def decoder(self, x):
         # [batch_size, pred_len, 2]
         for layer in self.Linear_Decoder:
@@ -97,30 +84,33 @@ class Model(nn.Module):
     def forecast(self, x_enc):
         # [batch_size, seq_len, enc_in]
         
-        # Normalization from Non-stationary Transformer
-        means = x_enc.mean(1, keepdim=True).detach()
-        x_enc = x_enc - means
-        stdev = torch.sqrt(
-            torch.var(x_enc, dim=1, keepdim=True, unbiased=False) + 1e-5)
-        x_enc /= stdev
-
-        x_enc, trend = self.decompsition(x_enc)
-        trend_out = trend.permute(0,2,1)
-        trend_out = self.conv_trend(trend_out)
-        trend_out,n_vars = self.patch_embedding_trend(trend_out)
-        trend_out = trend_out.permute(0, 2, 1)
-        for layer in self.Linear_Time_Trend:
-            trend_out = layer(trend_out)
-        trend_out = trend_out.permute(0, 2, 1)
-        trend_out = torch.reshape(
-            trend_out, (-1, n_vars, trend_out.shape[-2], trend_out.shape[-1]))
         
 
-        # do patching and embedding
+        # 区分External和Endogenous变量
+        x_en = x_enc[:,:,0:1]
+        x_ex = x_enc[:,:,1:]
+
+        # Normalization from Non-stationary Transformer
+        means = x_en.mean(1, keepdim=True).detach()
+        x_en = x_en - means
+        stdev = torch.sqrt(
+            torch.var(x_en, dim=1, keepdim=True, unbiased=False) + 1e-5)
+        x_en /= stdev
+
+        # 趋势分解
+        x_enc, trend = self.decompsition(x_en)
+        
+         # do patching and embedding
+        trend = trend.permute(0,2,1)
+        trend_out = self.conv_trend(trend)
+        trend_out,n_vars = self.patch_embedding_trend(trend_out)
+
         x_enc = x_enc.permute(0, 2, 1)
         enc_out = self.conv(x_enc)
         enc_out, n_vars = self.patch_embedding(enc_out)
         # [batch_sizes * enc_in, patch_num, d_model]
+
+        enc_out = enc_out + trend_out
 
         # Encoder
         enc_out = self.encoder(enc_out)
@@ -129,14 +119,12 @@ class Model(nn.Module):
             enc_out, (-1, n_vars, enc_out.shape[-2], enc_out.shape[-1]))
         # [batch_size, nvars, pred_len, d_model]]
 
-        enc_out = enc_out + trend_out
         # Decoder
         dec_out = self.decoder(enc_out)
         # [batch_size, nvars, pred_len, c_out]]
 
         dec_out = dec_out.reshape(dec_out.shape[0],dec_out.shape[1],dec_out.shape[2])
         dec_out = dec_out.permute(0,2,1)
-        
         
         # De-Normalization from Non-stationary Transformer
         dec_out = dec_out * \
