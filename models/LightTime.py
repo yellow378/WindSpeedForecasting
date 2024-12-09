@@ -28,7 +28,6 @@ class Model(nn.Module):
         # 趋势分解
         self.decompsition = series_decomp(configs.moving_avg)
 
-
         # Patch前增加一个一维卷积
         self.conv = nn.Conv1d(1,1,9,1,4)
         self.conv_trend = nn.Conv1d(1,1,9,1,4)
@@ -38,7 +37,21 @@ class Model(nn.Module):
         self.patch_embedding_trend = PatchEmbedding(self.d_model, self.patch_len, self.stride, self.padding, configs.dropout)
         
 
-        # TODO: 外生变量的运算
+        # 外生变量的运算
+        # [batch_size, 1, seq_len, enc_in-1]
+        self.ex_conv2d = nn.Conv2d(1,1,kernel_size=(9,3),stride=(3,1),padding=(4,1))
+        # [batch_size, 1, (seq_len-9)/3+1, enc_in-3]
+        self.ex_avgPooling = nn.AvgPool2d(kernel_size=(9,3),stride=(9,3))
+        # [batch_size, seq_len / 3, enc_in-1 /3]
+
+        self.ex_dModel = nn.Linear(3,self.d_model)
+        self.ex_predLen = nn.Linear(16,self.pred_len)
+        self.ex_batchNormal = nn.BatchNorm1d(self.pred_len)
+        self.ex_drop = nn.Dropout(configs.dropout*2)
+        self.ex_relu = nn.LeakyReLU()
+
+        # 权重
+        self.weight = nn.Parameter(torch.tensor([0.5,0.5]), requires_grad=True)
 
         
         # 线性运算
@@ -54,7 +67,7 @@ class Model(nn.Module):
         self.Linear_Time.append(nn.Dropout(configs.dropout))
         self.Linear_Time.append(nn.LeakyReLU())
     
-        
+        # Decoder
         self.Linear_Decoder = nn.ModuleList()
         # [batch_size, pred_len, d_model]
         self.Linear_Decoder.append(nn.Linear(self.d_model, self.c_out))
@@ -82,20 +95,34 @@ class Model(nn.Module):
         return x
 
     def forecast(self, x_enc):
-        # [batch_size, seq_len, enc_in]
-        
-        
 
+        # Normalization from Non-stationary Transformer
+        means = x_enc.mean(1, keepdim=True).detach()
+        x_enc = x_enc - means
+        stdev = torch.sqrt(
+            torch.var(x_enc, dim=1, keepdim=True, unbiased=False) + 1e-5)
+        x_enc /= stdev
+
+        # [batch_size, seq_len, enc_in]
         # 区分External和Endogenous变量
         x_en = x_enc[:,:,0:1]
         x_ex = x_enc[:,:,1:]
 
-        # Normalization from Non-stationary Transformer
-        means = x_en.mean(1, keepdim=True).detach()
-        x_en = x_en - means
-        stdev = torch.sqrt(
-            torch.var(x_en, dim=1, keepdim=True, unbiased=False) + 1e-5)
-        x_en /= stdev
+        x_ex = x_ex.reshape(x_ex.shape[0],1,x_ex.shape[1],x_ex.shape[2])
+        x_ex = self.ex_conv2d(x_ex)
+        x_ex = self.ex_avgPooling(x_ex)
+        x_ex = self.ex_dModel(x_ex)
+        x_ex = self.ex_drop(x_ex)
+        x_ex = self.ex_relu(x_ex)
+        x_ex = x_ex.permute(0,1,3,2)
+        x_ex = self.ex_predLen(x_ex)
+        x_ex = x_ex.permute(0,1,3,2)
+        x_ex = x_ex.squeeze(1)
+        x_ex = self.ex_batchNormal(x_ex)
+        x_ex = x_ex.unsqueeze(1)
+        x_ex = self.ex_drop(x_ex)
+        x_ex = self.ex_relu(x_ex)
+        
 
         # 趋势分解
         x_enc, trend = self.decompsition(x_en)
@@ -118,6 +145,11 @@ class Model(nn.Module):
         enc_out = torch.reshape(
             enc_out, (-1, n_vars, enc_out.shape[-2], enc_out.shape[-1]))
         # [batch_size, nvars, pred_len, d_model]]
+
+
+        # print(enc_out[0][0][0][0])
+        # print(x_ex[0][0][0][0])
+        enc_out = self.weight[0]*enc_out# + self.weight[1]*x_ex
 
         # Decoder
         dec_out = self.decoder(enc_out)
