@@ -13,11 +13,16 @@ class Model(nn.Module):
         self.d_model = configs.d_model
         self.enc_in = configs.enc_in
         self.c_out = configs.c_out
+        self.dropout = configs.dropout
+        self.d_ff = configs.d_ff
+        self.n_heads = configs.n_heads
 
         self.stride = configs.stride
         self.patch_len = configs.patch_len
         self.padding = self.stride
         self.patch_num = (self.seq_len+self.stride*2 - self.patch_len) // self.stride
+
+        self.short_len = 36
 
         if self.task_name == 'classification' or self.task_name == 'anomaly_detection' or self.task_name == 'imputation':
             self.pred_len = configs.seq_len
@@ -28,92 +33,103 @@ class Model(nn.Module):
         # 趋势分解
         self.decompsition = series_decomp(configs.moving_avg)
 
+        self.trend_seasonal_weight = nn.Parameter(torch.ones([2])*0.5)
+
         # Patch前增加一个一维卷积
-        self.conv = nn.Conv1d(1,1,9,1,4)
-        self.conv_trend = nn.Conv1d(1,1,9,1,4)
+        self.seasonal_conv = nn.Conv1d(1,1,9,1,4)
+        
+        self.trend_conv = nn.Conv1d(1,1,9,1,4)
 
         # Patch
-        self.patch_embedding = PatchEmbedding(self.d_model, self.patch_len, self.stride, self.padding, configs.dropout)
-        self.patch_embedding_trend = PatchEmbedding(self.d_model, self.patch_len, self.stride, self.padding, configs.dropout)
+        self.seasonal_patch_embedding = PatchEmbedding(self.d_model // 4 * 3, self.patch_len, self.stride, self.padding, configs.dropout)
+        
+        self.trend_patch_embedding= PatchEmbedding(self.d_model // 4 * 3, self.patch_len, self.stride, self.padding, configs.dropout)
         
 
         # 外生变量的运算
-        # [batch_size, 1, seq_len, enc_in-1]
-        self.ex_conv2d = nn.Conv2d(1,1,kernel_size=(9,3),stride=(3,1),padding=(4,1))
-        # [batch_size, 1, (seq_len-9)/3+1, enc_in-3]
-        self.ex_avgPooling = nn.AvgPool2d(kernel_size=(9,3),stride=(9,3))
-        # [batch_size, seq_len / 3, enc_in-1 /3]
+        self.ex_varMix = nn.Linear(self.enc_in-1,self.d_ff)
 
-        self.ex_dModel = nn.Linear(3,self.d_model)
-        self.ex_predLen = nn.Linear(16,self.pred_len)
-        self.ex_batchNormal = nn.BatchNorm1d(self.pred_len)
-        self.ex_drop = nn.Dropout(configs.dropout*2)
-        self.ex_relu = nn.LeakyReLU()
+        self.ex_timeShrink = nn.Linear(self.short_len//3, self.n_heads)
+
+        self.ex_dModel = nn.Linear(self.d_ff,self.d_model // 4)
+
+        self.ex_batchNormal = nn.BatchNorm1d(self.n_heads)
+
+        
 
         
         # 线性运算
         self.Linear_Time = nn.ModuleList()
-        # [batch_size * enc_in, patch_num, d_model]
-        # permute [batch_size * enc_in, d_model, patch_num]
+
         self.Linear_Time.append(nn.Linear(self.patch_num,configs.n_heads))
-        # [batch_size * enc_in, d_model, n_heads]
+
         self.Linear_Time.append(nn.LeakyReLU())
-        self.Linear_Time.append(nn.Linear(configs.n_heads,self.pred_len))
-        # [batch_size * enc_in, d_model, pred_len]
-        self.Linear_Time.append(nn.BatchNorm1d(self.d_model))
+
+
+        self.Linear_Time.append(nn.BatchNorm1d(self.d_model // 4 * 3))
+
         self.Linear_Time.append(nn.Dropout(configs.dropout))
+        
         self.Linear_Time.append(nn.LeakyReLU())
     
         # Decoder
-        self.Linear_Decoder = nn.ModuleList()
-        # [batch_size, pred_len, d_model]
-        self.Linear_Decoder.append(nn.Linear(self.d_model*2, self.c_out))
-        self.Linear_Decoder.append(nn.BatchNorm2d(1))
+        self.decoder_TimeExpend = nn.Linear(self.n_heads,self.pred_len)
+
+        self.decoder_batchNormal = nn.BatchNorm1d(self.d_model)
+
+        self.decoder_varShrink = nn.Linear(self.d_model, self.c_out)
 
     def x_ex_encoder(self,x_ex):
         # [batch_size, seq_len, enc_in-1]
-        x_ex = x_ex.unsqueeze(1)
-        x_ex = self.ex_conv2d(x_ex)
-        x_ex = self.ex_avgPooling(x_ex)
-        x_ex = self.ex_dModel(x_ex)
-        x_ex = self.ex_drop(x_ex)
-        x_ex = self.ex_relu(x_ex)
-        x_ex = x_ex.permute(0,1,3,2)
-        x_ex = self.ex_predLen(x_ex)
-        x_ex = x_ex.permute(0,1,3,2)
-        x_ex = x_ex.squeeze(1)
-        x_ex = self.ex_batchNormal(x_ex)
-        x_ex = x_ex.unsqueeze(1)
-        x_ex = self.ex_drop(x_ex)
-        x_ex = self.ex_relu(x_ex)
-        return x_ex
+
+        x_ex = x_ex[:,-self.short_len:,:]
+        #[batch_size, short_len, enc_in-1]
+
+        ex_out = self.ex_varMix(x_ex)
+        ex_out = F.leaky_relu(ex_out)
+        #[batch_size, short_len, d_ff]
+
+        ex_out = ex_out[:,::3,:].permute(0,2,1)
+        ex_out = self.ex_timeShrink(ex_out)
+        ex_out = F.leaky_relu(ex_out)
+        ex_out = ex_out.permute(0,2,1)
+        #[batch_size, n_heads, d_ff]
+
+        ex_out = self.ex_dModel(ex_out)
+        ex_out = self.ex_batchNormal(ex_out)
+        ex_out = F.dropout(ex_out,self.dropout)
+        ex_out = F.leaky_relu(ex_out)
+        #[batch_size, n_heads, d_model / 4]
+
+        return ex_out
 
     def x_en_encoder(self,x_en):
+        # [batch_size, seq_len, 1]
+
         # 趋势分解
-        x_enc, trend = self.decompsition(x_en)
+        seasonal, trend = self.decompsition(x_en)
         
-         # do patching and embedding
-        trend = trend.permute(0,2,1)
-        trend_out = self.conv_trend(trend)
-        trend_out,n_vars = self.patch_embedding_trend(trend_out)
+        # Patch 和 Embeding
+        trend_out = trend.permute(0,2,1)
+        trend_out = self.trend_conv(trend_out)
+        trend_out,n_vars = self.trend_patch_embedding(trend_out)
+        # [batch_size, patch_num, d_model / 4 * 3]
 
-        x_enc = x_enc.permute(0, 2, 1)
-        enc_out = self.conv(x_enc)
-        enc_out, n_vars = self.patch_embedding(enc_out)
-        # [batch_sizes * enc_in, patch_num, d_model]
+        seasonal_out = seasonal.permute(0, 2, 1)
+        seasonal_out = self.seasonal_conv(seasonal_out)
+        seasonal_out, n_vars = self.seasonal_patch_embedding(seasonal_out)
+        # [batch_size, patch_num, d_model / 4 * 3]
 
-        enc_out = enc_out + trend_out
+        enc_out = trend_out * self.trend_seasonal_weight[0] + seasonal_out * self.trend_seasonal_weight[1]
 
         enc_out = enc_out.permute(0, 2, 1)
+        # [batch_size, d_model / 4 * 3, patch_num]
+
         for layer in self.Linear_Time:
             enc_out = layer(enc_out)
         enc_out = enc_out.permute(0, 2, 1)
-        # [batch_size * enc_in, pred_len, d_model]
-        enc_out = torch.reshape(
-            enc_out, (-1, n_vars, enc_out.shape[-2], enc_out.shape[-1]))
-        # [batch_size, nvars, pred_len, d_model]]
+        # [batch_size, n_heads, d_model / 4 * 3]
         
-        # [batch_size * enc_in, pred_len, d_model]
         return enc_out
 
     def encoder(self, x):
@@ -129,18 +145,25 @@ class Model(nn.Module):
 
         # Step4: External和Endogenous交互
         enc_out = torch.cat([en_out,ex_out],dim=-1)
-        # [batch_size * enc_in, patch_num, d_model*2]
+        # [batch_size, n_heads, d_model]
         
         return enc_out
 
 
-    def decoder(self, x):
-        # [batch_size, pred_len, 2]
-        for layer in self.Linear_Decoder:
-            x = layer(x)
+    def decoder(self, enc_out):
+        # [batch_size, n_heads, d_model]
+        dec_out = enc_out.permute(0,2,1)
+        dec_out = self.decoder_TimeExpend(dec_out)
+        dec_out = self.decoder_batchNormal(dec_out)
+        dec_out = F.dropout(dec_out,self.dropout)
+        dec_out = F.leaky_relu(dec_out)
+        dec_out = dec_out.permute(0,2,1)
+        # [batch_size, pred_len, d_model]
+
+        dec_out = self.decoder_varShrink(dec_out)
 
         # [batch_size, pred_len, c_out]
-        return x
+        return dec_out
 
     def forecast(self, x_enc):
 
@@ -160,9 +183,6 @@ class Model(nn.Module):
         # Step3: Decoder
         dec_out = self.decoder(enc_out)
         # [batch_size, nvars, pred_len, c_out]]
-
-        dec_out = dec_out.reshape(dec_out.shape[0],dec_out.shape[1],dec_out.shape[2])
-        dec_out = dec_out.permute(0,2,1)
         
         # region Step4: De-Normalization from Non-stationary Transformer
         dec_out = dec_out * \
