@@ -50,9 +50,6 @@ class Model(nn.Module):
         self.ex_drop = nn.Dropout(configs.dropout*2)
         self.ex_relu = nn.LeakyReLU()
 
-        # 权重
-        self.weight = nn.Parameter(torch.tensor([0.5,0.5]), requires_grad=True)
-
         
         # 线性运算
         self.Linear_Time = nn.ModuleList()
@@ -70,45 +67,12 @@ class Model(nn.Module):
         # Decoder
         self.Linear_Decoder = nn.ModuleList()
         # [batch_size, pred_len, d_model]
-        self.Linear_Decoder.append(nn.Linear(self.d_model, self.c_out))
-        self.Linear_Decoder.append(nn.BatchNorm2d(self.enc_in))
+        self.Linear_Decoder.append(nn.Linear(self.d_model*2, self.c_out))
+        self.Linear_Decoder.append(nn.BatchNorm2d(1))
 
-    def encoder(self, x):
-        # [batch_size * enc_in, patch_num, d_model]
-        out = x.permute(0, 2, 1)
-        # print(out.shape)
-        # print(self.patch_num)
-        for layer in self.Linear_Time:
-            out = layer(out)
-        out = out.permute(0, 2, 1)
-
-        # [batch_size * enc_in, pred_len, d_model]
-        return out
-
-
-    def decoder(self, x):
-        # [batch_size, pred_len, 2]
-        for layer in self.Linear_Decoder:
-            x = layer(x)
-
-        # [batch_size, pred_len, c_out]
-        return x
-
-    def forecast(self, x_enc):
-
-        # Normalization from Non-stationary Transformer
-        means = x_enc.mean(1, keepdim=True).detach()
-        x_enc = x_enc - means
-        stdev = torch.sqrt(
-            torch.var(x_enc, dim=1, keepdim=True, unbiased=False) + 1e-5)
-        x_enc /= stdev
-
-        # [batch_size, seq_len, enc_in]
-        # 区分External和Endogenous变量
-        x_en = x_enc[:,:,0:1]
-        x_ex = x_enc[:,:,1:]
-
-        x_ex = x_ex.reshape(x_ex.shape[0],1,x_ex.shape[1],x_ex.shape[2])
+    def x_ex_encoder(self,x_ex):
+        # [batch_size, seq_len, enc_in-1]
+        x_ex = x_ex.unsqueeze(1)
         x_ex = self.ex_conv2d(x_ex)
         x_ex = self.ex_avgPooling(x_ex)
         x_ex = self.ex_dModel(x_ex)
@@ -122,8 +86,9 @@ class Model(nn.Module):
         x_ex = x_ex.unsqueeze(1)
         x_ex = self.ex_drop(x_ex)
         x_ex = self.ex_relu(x_ex)
-        
+        return x_ex
 
+    def x_en_encoder(self,x_en):
         # 趋势分解
         x_enc, trend = self.decompsition(x_en)
         
@@ -139,30 +104,72 @@ class Model(nn.Module):
 
         enc_out = enc_out + trend_out
 
-        # Encoder
-        enc_out = self.encoder(enc_out)
+        enc_out = enc_out.permute(0, 2, 1)
+        for layer in self.Linear_Time:
+            enc_out = layer(enc_out)
+        enc_out = enc_out.permute(0, 2, 1)
         # [batch_size * enc_in, pred_len, d_model]
         enc_out = torch.reshape(
             enc_out, (-1, n_vars, enc_out.shape[-2], enc_out.shape[-1]))
         # [batch_size, nvars, pred_len, d_model]]
+        
+        # [batch_size * enc_in, pred_len, d_model]
+        return enc_out
+
+    def encoder(self, x):
+        # Step1: 区分External和Endogenous变量
+        x_en = x[:,:,0:1]
+        x_ex = x[:,:,1:]
+
+        # Step2: 处理External变量
+        ex_out = self.x_ex_encoder(x_ex)
+        
+        # Step3: 处理Endogenous变量
+        en_out = self.x_en_encoder(x_en)
+
+        # Step4: External和Endogenous交互
+        enc_out = torch.cat([en_out,ex_out],dim=-1)
+        # [batch_size * enc_in, patch_num, d_model*2]
+        
+        return enc_out
 
 
-        # print(enc_out[0][0][0][0])
-        # print(x_ex[0][0][0][0])
-        enc_out = self.weight[0]*enc_out# + self.weight[1]*x_ex
+    def decoder(self, x):
+        # [batch_size, pred_len, 2]
+        for layer in self.Linear_Decoder:
+            x = layer(x)
 
-        # Decoder
+        # [batch_size, pred_len, c_out]
+        return x
+
+    def forecast(self, x_enc):
+
+
+        # region Step1: Normalization
+        means = x_enc.mean(1, keepdim=True).detach()
+        x_enc = x_enc - means
+        stdev = torch.sqrt(
+            torch.var(x_enc, dim=1, keepdim=True, unbiased=False) + 1e-5)
+        x_enc /= stdev
+        # endregion
+        # [batch_size, seq_len, enc_in]
+
+        # Step2: Encoder
+        enc_out = self.encoder(x_enc)
+
+        # Step3: Decoder
         dec_out = self.decoder(enc_out)
         # [batch_size, nvars, pred_len, c_out]]
 
         dec_out = dec_out.reshape(dec_out.shape[0],dec_out.shape[1],dec_out.shape[2])
         dec_out = dec_out.permute(0,2,1)
         
-        # De-Normalization from Non-stationary Transformer
+        # region Step4: De-Normalization from Non-stationary Transformer
         dec_out = dec_out * \
                   (stdev[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
         dec_out = dec_out + \
                   (means[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
+        #endregion
         return dec_out
 
     def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask=None):
@@ -171,4 +178,3 @@ class Model(nn.Module):
             return dec_out[:, -self.pred_len:, :]  # [B, L, D]
         else: 
             raise Exception("暂未支持 分类/异常值检测/插值 等功能")
-        return None
