@@ -112,3 +112,5 @@ mse:0.3407994508743286, mae:0.42111894488334656
 
 python run.py --task_name long_term_forecast --is_training 1 --model_id test --model LightTime  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 432  --pred_len 36 --d_model 128 --n_heads 8 --use_gpu True --batch_size 64 --enc_in 1 --dec_in 1 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3
 mse:0.33101576566696167, mae:0.4171292185783386
+
+c260bd787dc9f6830394fb611de2740d9c0e10f4

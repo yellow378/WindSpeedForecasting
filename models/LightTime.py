@@ -33,12 +33,10 @@ class Model(nn.Module):
         # 趋势分解
         self.decompsition = series_decomp(configs.moving_avg)
 
-        self.trend_seasonal_weight = nn.Parameter(torch.ones([2])*0.5)
-
         # Patch前增加一个一维卷积
-        self.seasonal_conv = nn.Conv1d(1,1,9,1,4)
+        self.seasonal_conv = nn.Conv2d(1,1,[5,5],[1,1],[2,2])
         
-        self.trend_conv = nn.Conv1d(1,1,9,1,4)
+        self.trend_conv = nn.Conv2d(1,1,[5,5],[1,1],[2,2])
 
         # Patch
         self.seasonal_patch_embedding = PatchEmbedding(self.d_model // 4 * 3, self.patch_len, self.stride, self.padding, configs.dropout)
@@ -63,14 +61,11 @@ class Model(nn.Module):
 
         self.Linear_Time.append(nn.Linear(self.patch_num,configs.n_heads))
 
-        self.Linear_Time.append(nn.LeakyReLU())
-
-
         self.Linear_Time.append(nn.BatchNorm1d(self.d_model // 4 * 3))
 
         self.Linear_Time.append(nn.Dropout(configs.dropout))
         
-        self.Linear_Time.append(nn.LeakyReLU())
+        self.Linear_Time.append(nn.ReLU())
     
         # Decoder
         self.decoder_TimeExpend = nn.Linear(self.n_heads,self.pred_len)
@@ -86,19 +81,19 @@ class Model(nn.Module):
         #[batch_size, short_len, enc_in-1]
 
         ex_out = self.ex_varMix(x_ex)
-        ex_out = F.leaky_relu(ex_out)
+        ex_out = F.relu(ex_out)
         #[batch_size, short_len, d_ff]
 
         ex_out = ex_out[:,::3,:].permute(0,2,1)
         ex_out = self.ex_timeShrink(ex_out)
-        ex_out = F.leaky_relu(ex_out)
+        ex_out = F.relu(ex_out)
         ex_out = ex_out.permute(0,2,1)
         #[batch_size, n_heads, d_ff]
 
         ex_out = self.ex_dModel(ex_out)
         ex_out = self.ex_batchNormal(ex_out)
         ex_out = F.dropout(ex_out,self.dropout)
-        ex_out = F.leaky_relu(ex_out)
+        ex_out = F.relu(ex_out)
         #[batch_size, n_heads, d_model / 4]
 
         return ex_out
@@ -111,16 +106,18 @@ class Model(nn.Module):
         
         # Patch 和 Embeding
         trend_out = trend.permute(0,2,1)
-        trend_out = self.trend_conv(trend_out)
         trend_out,n_vars = self.trend_patch_embedding(trend_out)
+        trend_out = trend_out.unsqueeze(1)
+        trend_out = self.trend_conv(trend_out).squeeze(1)
         # [batch_size, patch_num, d_model / 4 * 3]
 
         seasonal_out = seasonal.permute(0, 2, 1)
-        seasonal_out = self.seasonal_conv(seasonal_out)
         seasonal_out, n_vars = self.seasonal_patch_embedding(seasonal_out)
+        seasonal_out = seasonal_out.unsqueeze(1)
+        seasonal_out = self.seasonal_conv(seasonal_out).squeeze(1)
         # [batch_size, patch_num, d_model / 4 * 3]
 
-        enc_out = trend_out * self.trend_seasonal_weight[0] + seasonal_out * self.trend_seasonal_weight[1]
+        enc_out = trend_out  + seasonal_out
 
         enc_out = enc_out.permute(0, 2, 1)
         # [batch_size, d_model / 4 * 3, patch_num]
@@ -156,7 +153,7 @@ class Model(nn.Module):
         dec_out = self.decoder_TimeExpend(dec_out)
         dec_out = self.decoder_batchNormal(dec_out)
         dec_out = F.dropout(dec_out,self.dropout)
-        dec_out = F.leaky_relu(dec_out)
+        dec_out = F.relu(dec_out)
         dec_out = dec_out.permute(0,2,1)
         # [batch_size, pred_len, d_model]
 

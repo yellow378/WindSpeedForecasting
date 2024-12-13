@@ -184,3 +184,12 @@ mse:0.4540943205356598, mae:0.5105962157249451
 long_term_forecast_test_LightTime_custom_ftMS_sl432_ll48_pl36_dm32_nh2_el2_dl1_df2048_fc1_ebtimeF_dtTrue_test_0  
 mse:0.40829741954803467, mae:0.4717440903186798
 
+long_term_forecast_test_LightTime_custom_ftMS_sl432_ll48_pl36_dm128_nh4_el2_dl1_df3_fc1_ebtimeF_dtTrue_test_0  
+mse:80.22978973388672, mae:6.077356338500977
+
+long_term_forecast_test_LightTime_custom_ftMS_sl432_ll48_pl36_dm128_nh4_el2_dl1_df3_fc1_ebtimeF_dtTrue_test_0  
+mse:0.880794107913971, mae:0.7344067692756653
+
+long_term_forecast_test_LightTime_custom_ftMS_sl432_ll48_pl36_dm128_nh4_el2_dl1_df3_fc1_ebtimeF_dtTrue_test_0  
+mse:0.45062559843063354, mae:0.5118280053138733
+
