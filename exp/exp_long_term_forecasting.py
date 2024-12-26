@@ -2,6 +2,7 @@ from data_provider.data_factory import data_provider
 from exp.exp_basic import Exp_Basic
 from utils.tools import EarlyStopping, adjust_learning_rate, visual
 from utils.metrics import metric
+from utils.soft_dtw import SoftDTW
 import torch
 import torch.nn as nn
 from torch import optim
@@ -9,6 +10,7 @@ import os
 import time
 import warnings
 import numpy as np
+import pandas as pd
 
 warnings.filterwarnings('ignore')
 
@@ -37,6 +39,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
     def _select_criterion(self):
         criterion = nn.MSELoss()
+        #criterion = SoftDTW(gamma=1.0, normalize=True)
         return criterion
 
     def vali(self, vali_data, vali_loader, criterion):
@@ -72,7 +75,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 pred = outputs.detach().cpu()
                 true = batch_y.detach().cpu()
 
-                loss = criterion(pred, true)
+                # loss = criterion(pred.squeeze(-1), true.squeeze(-1))
+                loss = criterion(pred.squeeze(-1), true.squeeze(-1))
 
                 total_loss.append(loss)
         total_loss = np.average(total_loss)
@@ -140,7 +144,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     f_dim = -1 if self.args.features == 'MS' else 0
                     outputs = outputs[:, -self.args.pred_len:, f_dim:]
                     batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
-                    loss = criterion(outputs, batch_y)
+                    loss = criterion(outputs.squeeze(-1), batch_y.squeeze(-1))
                     train_loss.append(loss.item())
 
                 if (i + 1) % 100 == 0:
@@ -184,6 +188,11 @@ class Exp_Long_Term_Forecast(Exp_Basic):
             print('loading model')
             self.model.load_state_dict(torch.load(os.path.join('./checkpoints/' + setting, 'checkpoint.pth')))
 
+        # linear_weights = self.model.Linear.weight.data.cpu().numpy()
+        # np.savetxt('linear_weights.txt', linear_weights, fmt='%f')
+        # np.save('linear_weights.npy', linear_weights)
+        # if test == 1:
+        #     return
         preds = []
         trues = []
         folder_path = './test_results/' + setting + '/'

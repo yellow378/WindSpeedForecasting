@@ -114,3 +114,34 @@ python run.py --task_name long_term_forecast --is_training 1 --model_id test --m
 mse:0.33101576566696167, mae:0.4171292185783386
 
 c260bd787dc9f6830394fb611de2740d9c0e10f4
+
+
+
+
+DLinear
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model DLinear  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 432  --pred_len 36 --use_gpu True --batch_size 64 --enc_in 1 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3
+mse:0.3390740752220154, mae:0.4364241063594818
+
+DLinearSingle
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model DLinearSingle  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 432  --pred_len 36 --use_gpu True --batch_size 64 --enc_in 1 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3
+mse:0.33871567249298096, mae:0.4348585307598114
+
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model DLinearSingle  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 72  --pred_len 36 --use_gpu True --batch_size 64 --enc_in 1 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3
+mse:0.33774054050445557, mae:0.4426599442958832
+
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model DLinearSingle  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 10 --label_len 0  --pred_len 36 --use_gpu True --batch_size 64 --enc_in 1 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3
+mse:0.3341302275657654, mae:0.4439605474472046
+
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model DLinearSingle  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 4 --label_len 0  --pred_len 36 --use_gpu True --batch_size 64 --enc_in 1 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3
+mse:0.33335691690444946, mae:0.44283369183540344
+
+
+use DTW
+mse:0.31317251920700073, mae:0.4215049743652344
+
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model PatchTST  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features S --target Wspd --seq_len 432 --label_len 36  --pred_len 36 --use_gpu True --batch_size 8 --enc_in 1 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3
+Total number of parameters: 7309348
+mse:0.46682092547416687, mae:0.5013763308525085
+
+python run.py --task_name long_term_forecast --is_training 1 --model_id test --model PatchTST  --data custom --root_path ./dataset/processed --data_path Turb1.csv --features MS --target Wspd --seq_len 432 --label_len 36  --pred_len 36 --use_gpu True --batch_size 8 --enc_in 10 --dec_in 10 --c_out 1 --train_epochs 15 --learning_rate 0.001 --patience 3 --d_ff 128
+Total number of parameters: 3373348

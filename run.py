@@ -98,6 +98,7 @@ if __name__ == '__main__':
     # LightTime
     parser.add_argument('--patch_len', type=int,default = 18, help='patch len')
     parser.add_argument('--stride', type=int, default=9, help='stride')
+    parser.add_argument('--isEx',  action='store_false', help='use extogous varialbes')
 
     args = parser.parse_args()
     args.use_gpu = True if torch.cuda.is_available() and args.use_gpu else False
