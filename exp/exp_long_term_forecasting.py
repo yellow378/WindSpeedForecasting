@@ -187,14 +187,23 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         if test:
             print('loading model')
             self.model.load_state_dict(torch.load(os.path.join('./checkpoints/' + setting, 'checkpoint.pth')))
-
-        # linear_weights = self.model.Linear.weight.data.cpu().numpy()
-        # np.savetxt('linear_weights.txt', linear_weights, fmt='%f')
-        # np.save('linear_weights.npy', linear_weights)
-        # if test == 1:
-        #     return
+        # ### save the weights of the linear layer
+        seasonal_weights = self.model.seasonal_patch_embedding.value_embedding.weight.data.cpu().numpy()
+        #treand_weights = self.model.Linear_Trend.weight.data.cpu().numpy()
+        np.savetxt('seasonal_weights.txt', seasonal_weights, fmt='%f')
+        #np.savetxt('treand_weights.txt', treand_weights, fmt='%f')
+        np.save('seasonal_weights.npy', seasonal_weights)
+        #np.save('treand_weights.npy', treand_weights)
+        # # if test == 1:
+        # #     return
+        # ### end
         preds = []
         trues = []
+        # ### save seasonal and trend
+        # seasonals = []
+        # trends = []
+        # xs = []
+
         folder_path = './test_results/' + setting + '/'
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
@@ -232,11 +241,25 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 batch_y = batch_y.detach().cpu().numpy()
                 if test_data.scale and self.args.inverse:
                     shape = outputs.shape
-                    outputs = test_data.inverse_transform(outputs.squeeze(0)).reshape(shape)
-                    batch_y = test_data.inverse_transform(batch_y.squeeze(0)).reshape(shape)
+                    expanded_outputs = np.zeros((outputs.shape[0], outputs.shape[1], 10))
+                    expanded_outputs[:, :, -1] = outputs[:, :, -1]
+                    expanded_outputs[:, :, 0:-1] = batch_y[:, :, 0:-1]
+                    outputs = expanded_outputs
+                    outputs = test_data.inverse_transform(outputs.squeeze(0))[:,-1:].reshape(shape)
+                    batch_y = test_data.inverse_transform(batch_y.squeeze(0))[:,-1:].reshape(shape)
         
                 outputs = outputs[:, :, f_dim:]
                 batch_y = batch_y[:, :, f_dim:]
+
+                # ### trend
+                # x = batch_x.detach().cpu().numpy()
+                # seasonal, trend = self.model.decompsition(x)
+                # seasonal = seasonal.detach().cpu().numpy()
+                # trend = trend.detach().cpu().numpy()
+                # xs.append(x)
+                # seasonals.append(seasonal)
+                # trends.append(trend)
+                # ### end
 
                 pred = outputs
                 true = batch_y
@@ -259,6 +282,16 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         trues = trues.reshape(-1, trues.shape[-2], trues.shape[-1])
         print('test shape:', preds.shape, trues.shape)
 
+        # ###seasonal
+        # seasonals = np.array(seasonals)
+        # trends = np.array(trends)
+        # xs = np.array(xs)
+        # print('seasonal shape:', seasonals.shape, trends.shape, xs.shape)
+        # seasonals = seasonals.reshape(-1, seasonals.shape[-2], seasonals.shape[-1])
+        # trends = trends.reshape(-1, trends.shape[-2], trends.shape[-1])
+        # xs = xs.reshape(-1, xs.shape[-2], xs.shape[-1])
+        # ###end
+
         # result save
         folder_path = './results/' + setting + '/'
         if not os.path.exists(folder_path):
@@ -276,5 +309,10 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         np.save(folder_path + 'metrics.npy', np.array([mae, mse, rmse, mape, mspe]))
         np.save(folder_path + 'pred.npy', preds)
         np.save(folder_path + 'true.npy', trues)
+        # ### seasonal
+        # np.save(folder_path + 'seasonal.npy', seasonals)
+        # np.save(folder_path + 'trend.npy', trends)
+        # np.save(folder_path + 'x.npy', xs)
+        # ### end
 
         return
