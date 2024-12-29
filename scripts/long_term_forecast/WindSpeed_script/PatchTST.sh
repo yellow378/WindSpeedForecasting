@@ -35,7 +35,7 @@ do
           --data_path $data_path_name \
           --model_id ${model_id_name}_${seq_len}_${pred_len} \
           --model $model_name \
-          --task_name 'long_term_forecast' \
+          --task_name long_term_forecast \
           --data $data_name \
           --features MS \
           --target Wspd \
@@ -55,6 +55,7 @@ do
           --decomposition 1 \
           --loss mse \
           --use_gpu True \
+          --inverse \
           --itr 1 --batch_size 256 --learning_rate 0.001"
 
         # 定义日志文件路径

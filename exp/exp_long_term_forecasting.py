@@ -9,6 +9,7 @@ import os
 import time
 import warnings
 import numpy as np
+import matplotlib.pyplot as plt
 
 warnings.filterwarnings('ignore')
 
@@ -277,4 +278,54 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         np.save(folder_path + 'pred.npy', preds)
         np.save(folder_path + 'true.npy', trues)
 
+        
+        trues = trues[::36,:,:]
+        trues = trues.reshape(-1)
+
+        preds = preds[::36,:,:]
+        preds = preds.reshape(-1)
+
+        # 创建一个图形和坐标轴对象
+        fig, ax = plt.subplots(figsize=(20,8))
+
+        # 绘制trues序列，颜色为蓝色
+        ax.plot(trues, color='red', label='trues')
+
+        # 绘制preds序列，颜色为绿色
+        ax.plot(preds, color='blue', label='preds')
+
+        # 添加图例
+        ax.legend()
+
+        # 设置坐标轴标签等
+        ax.set_xlabel('Time Point')
+        ax.set_ylabel('Wind Speed')
+        ax.set_title('Wind Speed Forecasting')
+        plt.savefig(folder_path+'forecasting.png',bbox_inches='tight')
+
+        true = trues[2880:5000]
+        pred = preds[2880:5000]
+        # pred = preds[2880:4320]
+
+        # 创建一个图形和坐标轴对象
+        fig, ax = plt.subplots(figsize=(20,8))
+
+        # 绘制trues序列，颜色为蓝色
+        ax.plot(true, color='red', label='trues')
+
+        # 绘制preds序列，颜色为绿色
+        ax.plot(pred, color='blue', label='preds')
+
+        # 添加每隔36个点的竖线（虚线）
+        for i in range(0, len(true), 36):
+            ax.axvline(x=i, color='gray', linestyle='dashed')
+
+        # 添加图例
+        ax.legend()
+
+        # 设置坐标轴标签等
+        ax.set_xlabel('Time Point')
+        ax.set_ylabel('Wind Speed')
+        ax.set_title('Wind Speed Forecasting')
+        plt.savefig(folder_path+'forecasting_local.png',bbox_inches='tight')
         return
