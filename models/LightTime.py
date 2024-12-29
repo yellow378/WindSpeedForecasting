@@ -58,7 +58,7 @@ class Model(nn.Module):
         self.Linear_Decoder = nn.ModuleList()
         # [batch_size, pred_len, d_model]
         self.Linear_Decoder.append(nn.Linear(self.d_model, self.c_out))
-        self.Linear_Decoder.append(nn.BatchNorm2d(self.enc_in))
+        #self.Linear_Decoder.append(nn.BatchNorm2d(self.pred_len))
 
     def encoder(self, x):
         # [batch_size * enc_in, patch_num, d_model]
@@ -76,6 +76,7 @@ class Model(nn.Module):
     def decoder(self, x):
         # [batch_size, pred_len, 2]
         for layer in self.Linear_Decoder:
+            #print(x.shape)
             x = layer(x)
 
         # [batch_size, pred_len, c_out]
