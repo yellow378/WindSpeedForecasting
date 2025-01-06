@@ -31,7 +31,7 @@ class Model(nn.Module):
         # build model
         self.valueEmbedding = nn.Sequential(
             nn.Linear(self.seg_len, self.d_model),
-            nn.ReLU()
+            nn.Sigmoid()
         )
 
         if self.rnn_type == "rnn":

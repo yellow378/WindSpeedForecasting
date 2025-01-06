@@ -191,6 +191,10 @@ class Exp_Long_Term_Forecast(Exp_Basic):
             print('loading model')
             self.model.load_state_dict(torch.load(os.path.join('./checkpoints/' + setting, 'checkpoint.pth')))
 
+        patch_weights = self.model.valueEmbedding[0].weight.data.cpu().numpy()
+        np.savetxt('patch_weights.txt', patch_weights, fmt='%f')
+        np.save('patch_weights.npy', patch_weights)
+
         preds = []
         trues = []
         folder_path = './test_results/' + setting + '/'
