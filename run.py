@@ -98,7 +98,8 @@ if __name__ == '__main__':
     # LightTime
     #parser.add_argument('--patch_len', type=int,default = 18, help='patch len')
     #parser.add_argument('--stride', type=int, default=9, help='stride')
-
+    parser.add_argument('--noEx',  action='store_true', help='use extogous varialbes')
+    
     # SegRNN
     parser.add_argument('--rnn_type', default='gru', help='rnn_type')
     parser.add_argument('--dec_way', default='pmf', help='decode way')
