@@ -11,6 +11,7 @@ import time
 import warnings
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 
 warnings.filterwarnings('ignore')
 
@@ -64,10 +65,13 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                         else:
                             outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
                 else:
-                    if self.args.output_attention:
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
-                    else:
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                    if any(substr in self.args.model for substr in {'SparseTSF', 'SegRNN', 'TST'}):
+                            outputs = self.model(batch_x)
+                    else:        
+                        if self.args.output_attention:
+                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+                        else:
+                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
                 f_dim = -1 if self.args.features == 'MS' else 0
                 outputs = outputs[:, -self.args.pred_len:, f_dim:]
                 batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
@@ -136,10 +140,13 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                         loss = criterion(outputs, batch_y)
                         train_loss.append(loss.item())
                 else:
-                    if self.args.output_attention:
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
-                    else:
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                    if any(substr in self.args.model for substr in {'SparseTSF','SegRNN', 'TST'}):
+                            outputs = self.model(batch_x)
+                    else: 
+                        if self.args.output_attention:
+                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+                        else:
+                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
 
                     f_dim = -1 if self.args.features == 'MS' else 0
                     outputs = outputs[:, -self.args.pred_len:, f_dim:]
@@ -187,16 +194,11 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         if test:
             print('loading model')
             self.model.load_state_dict(torch.load(os.path.join('./checkpoints/' + setting, 'checkpoint.pth')))
-        # ### save the weights of the linear layer
-        seasonal_weights = self.model.seasonal_patch_embedding.value_embedding.weight.data.cpu().numpy()
-        #treand_weights = self.model.Linear_Trend.weight.data.cpu().numpy()
-        np.savetxt('seasonal_weights.txt', seasonal_weights, fmt='%f')
-        #np.savetxt('treand_weights.txt', treand_weights, fmt='%f')
-        np.save('seasonal_weights.npy', seasonal_weights)
-        #np.save('treand_weights.npy', treand_weights)
-        # # if test == 1:
-        # #     return
-        # ### end
+
+        patch_weights = self.model.valueEmbedding[0].weight.data.cpu().numpy()
+        np.savetxt('patch_weights.txt', patch_weights, fmt='%f')
+        np.save('patch_weights.npy', patch_weights)
+
         preds = []
         trues = []
         # ### save seasonal and trend
@@ -228,11 +230,14 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                         else:
                             outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
                 else:
-                    if self.args.output_attention:
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
-
+                    if any(substr in self.args.model for substr in {'SparseTSF','SegRNN', 'TST'}):
+                            outputs = self.model(batch_x)
                     else:
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                        if self.args.output_attention:
+                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+
+                        else:
+                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
 
                 f_dim = -1 if self.args.features == 'MS' else 0
                 outputs = outputs[:, -self.args.pred_len:, :]
@@ -315,4 +320,54 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         # np.save(folder_path + 'x.npy', xs)
         # ### end
 
+        
+        trues = trues[::36,:,:]
+        trues = trues.reshape(-1)
+
+        preds = preds[::36,:,:]
+        preds = preds.reshape(-1)
+
+        # 创建一个图形和坐标轴对象
+        fig, ax = plt.subplots(figsize=(20,8))
+
+        # 绘制trues序列，颜色为蓝色
+        ax.plot(trues, color='red', label='trues')
+
+        # 绘制preds序列，颜色为绿色
+        ax.plot(preds, color='blue', label='preds')
+
+        # 添加图例
+        ax.legend()
+
+        # 设置坐标轴标签等
+        ax.set_xlabel('Time Point')
+        ax.set_ylabel('Wind Speed')
+        ax.set_title('Wind Speed Forecasting')
+        plt.savefig(folder_path+'forecasting.png',bbox_inches='tight')
+
+        true = trues[2880:5000]
+        pred = preds[2880:5000]
+        # pred = preds[2880:4320]
+
+        # 创建一个图形和坐标轴对象
+        fig, ax = plt.subplots(figsize=(20,8))
+
+        # 绘制trues序列，颜色为蓝色
+        ax.plot(true, color='red', label='trues')
+
+        # 绘制preds序列，颜色为绿色
+        ax.plot(pred, color='blue', label='preds')
+
+        # 添加每隔36个点的竖线（虚线）
+        for i in range(0, len(true), 36):
+            ax.axvline(x=i, color='gray', linestyle='dashed')
+
+        # 添加图例
+        ax.legend()
+
+        # 设置坐标轴标签等
+        ax.set_xlabel('Time Point')
+        ax.set_ylabel('Wind Speed')
+        ax.set_title('Wind Speed Forecasting')
+        plt.savefig(folder_path+'forecasting_local.png',bbox_inches='tight')
         return
