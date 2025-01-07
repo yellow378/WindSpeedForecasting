@@ -177,7 +177,7 @@ class PatchEmbedding(nn.Module):
         self.value_embedding = nn.Linear(patch_len, d_model, bias=False)
 
         # Positional embedding
-        self.position_embedding = LearnablePositionalEmbedding(d_model)
+        self.position_embedding = PositionalEmbedding(d_model)
 
         # Residual dropout
         self.dropout = nn.Dropout(dropout)

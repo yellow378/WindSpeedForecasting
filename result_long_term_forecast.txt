@@ -468,3 +468,9 @@ mse:4.539314141616901, mae:1.535454587852017
 long_term_forecast_Wind_LightTime_36_36_LightTime_custom_ftMS_sl432_ll0_pl36_dm64_nh16_el2_dl1_df2048_fc1_ebtimeF_dtTrue_test_0  
 mse:4.551654490472601, mae:1.53952326656925
 
+long_term_forecast_Wind_LightTime_36_36_LightTime_custom_ftMS_sl432_ll0_pl36_dm64_nh16_el2_dl1_df2048_fc1_ebtimeF_dtTrue_test_0  
+mse:4.522060232813975, mae:1.539740140305003
+
+long_term_forecast_Wind_LightTime_36_36_LightTime_custom_ftMS_sl432_ll0_pl36_dm128_nh16_el2_dl1_df2048_fc1_ebtimeF_dtTrue_test_0  
+mse:4.507235893870987, mae:1.5281492878515197
+
