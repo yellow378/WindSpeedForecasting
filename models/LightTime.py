@@ -1,8 +1,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from layers.Embed import PatchEmbedding
+# from layers.Embed import PatchEmbedding
 from layers.Autoformer_EncDec import series_decomp
+import math
 
 class Model(nn.Module):
 
@@ -29,25 +30,31 @@ class Model(nn.Module):
         else:
             self.pred_len = configs.pred_len
 
-        self.en_conv = nn.Conv1d(1,1,9,1,4)
-        self.ex_conv = nn.Conv1d(9,9,9,1,4)
+        if(not self.noEx):
+            self.ex_conv = nn.Conv1d(9,9,9,1,4)
+
+        # 趋势分解
+        self.decompsition = series_decomp(configs.moving_avg)
+    
         # Patch
+        self.trend_embedding = PatchEmbedding(64, self.patch_len, self.stride, self.padding, self.dropout)
         self.en_patch_embedding = PatchEmbedding(self.d_model, self.patch_len, self.stride, self.padding, self.dropout)
         if(not self.noEx):
-            self.ex_patch_embedding = PatchEmbedding(self.d_model, self.patch_len, self.stride, self.padding, self.dropout)
+            self.ex_patch_embedding = PatchEmbedding(self.d_model+64, self.patch_len, self.stride, self.padding, self.dropout)
 
+        self.global_position_embedding = LearnablePositionalEmbedding(self.patch_num)
         # 线性运算
         if self.noEx:
             self.linear1 = nn.Linear(self.patch_num, self.n_heads)
         else:
             self.linear1 = nn.Linear(self.patch_num + (self.enc_in - 1)*2, self.n_heads)
-        self.linear2 = nn.Linear(self.n_heads, self.n_heads)
+        #self.linear2 = nn.Linear(self.d_model, self.d_model//2)
         #self.en_Linear_Time.append(nn.Dropout(self.dropout))
 
         # Decoder
         self.decoder_TimeExpend = nn.Linear(self.n_heads,self.pred_len)
         #self.decoder_batchNormal = nn.BatchNorm1d(self.d_model)
-        self.decoder_varShrink = nn.Linear(self.d_model, self.c_out)
+        self.decoder_varShrink = nn.Linear(self.d_model+64, self.c_out)
 
     def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask=None):
         if self.task_name == 'long_term_forecast' or self.task_name == 'short_term_forecast':
@@ -59,7 +66,7 @@ class Model(nn.Module):
     def forecast(self, x_enc):
         # [batch_size, seq_len, enc_in]
 
-        # region Step2: Normalization
+        # region Step1: Normalization
         means = x_enc.mean(1, keepdim=True).detach()
         x_enc = x_enc - means
         stdev = torch.sqrt(
@@ -105,10 +112,10 @@ class Model(nn.Module):
         #enc_out = enc_out.permute(0,2,1)
 
         enc_out = self.linear1(enc_out)
-        enc_out = F.relu(enc_out)
-        enc_out = self.linear2(enc_out)
-        enc_out = F.dropout(enc_out,self.dropout)
-        enc_out = F.relu(enc_out)
+        enc_out = F.sigmoid(enc_out)
+        #enc_out = self.linear2(enc_out.permute(0,2,1)).permute(0,2,1)
+        #enc_out = F.dropout(enc_out,self.dropout)
+        #enc_out = F.sigmoid(enc_out)
         # [batch_size, n_heads, d_model]
         return enc_out
 
@@ -121,18 +128,29 @@ class Model(nn.Module):
         ex_out,n_vars = self.ex_patch_embedding(x_ex)
         #[batch_size*n_vars, d_model, 1]
         batch_size = x_ex.size(0)
-        ex_out = ex_out.reshape([batch_size,self.d_model,n_vars*2])
+        ex_out = ex_out.reshape([batch_size,self.d_model+64,n_vars*2])
         # [batch_size,d_model,n_vars]
         return ex_out, n_vars
 
     def x_en_encoder(self,x_en):
         # [batch_size, seq_len, 1]
         # Patch 和 Embeding
-        x_en = x_en.permute(0,2,1)
-        x_en_out = self.en_conv(x_en)
-        x_en_out,n_vars = self.en_patch_embedding(x_en)
+        seasonal_init, trend_init = self.decompsition(x_en)
+        seasonal_init, trend_init = seasonal_init.permute(
+            0, 2, 1), trend_init.permute(0, 2, 1)
+
+        trend_out,n_vars = self.trend_embedding(trend_init)
+        trend_out = trend_out.permute(0, 2, 1)
+        # [batch_size, 16, patch_num]
+
+
+        x_en_out,n_vars = self.en_patch_embedding(seasonal_init)
         x_en_out = x_en_out.permute(0, 2, 1)
-        # [batch_size, d_model, patch_num]  
+        # [batch_size, d_model, patch_num]
+
+        x_en_out = torch.cat([x_en_out,trend_out],dim=1)
+        x_en_out = x_en_out+self.global_position_embedding(x_en_out)
+        
         return x_en_out
 
     def decoder(self, enc_out):
@@ -140,9 +158,65 @@ class Model(nn.Module):
         #dec_out = enc_out.permute(0,2,1)
         dec_out = self.decoder_TimeExpend(enc_out)
         dec_out = F.dropout(dec_out,self.dropout)
-        dec_out = F.relu(dec_out)
+        dec_out = F.sigmoid(dec_out)
         dec_out = dec_out.permute(0,2,1)
         # [batch_size, pred_len, d_model]
         dec_out = self.decoder_varShrink(dec_out)
         # [batch_size, pred_len, c_out]
         return dec_out
+    
+class PatchEmbedding(nn.Module):
+    def __init__(self, d_model, patch_len, stride, padding, dropout):
+        super(PatchEmbedding, self).__init__()
+        # Patching
+        self.patch_len = patch_len
+        self.stride = stride
+        self.padding_patch_layer = nn.ReplicationPad1d((0, padding))
+
+        # Backbone, Input encoding: projection of feature vectors onto a d-dim vector space
+        self.value_embedding = nn.Linear(patch_len, d_model, bias=False)
+
+        # Positional embedding
+        self.position_embedding = LearnablePositionalEmbedding(d_model)
+
+        # Residual dropout
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        # do patching
+        n_vars = x.shape[1]
+        x = self.padding_patch_layer(x)
+        x = x.unfold(dimension=-1, size=self.patch_len, step=self.stride)
+        x = torch.reshape(x, (x.shape[0] * x.shape[1], x.shape[2], x.shape[3]))
+        # Input encoding
+        x = self.value_embedding(x) + self.position_embedding(x)
+        x = F.sigmoid(x)
+        return self.dropout(x), n_vars
+
+class PositionalEmbedding(nn.Module):
+    def __init__(self, d_model, max_len=5000):
+        super(PositionalEmbedding, self).__init__()
+        # Compute the positional encodings once in log space.
+        pe = torch.zeros(max_len, d_model).float()
+        pe.require_grad = False
+
+        position = torch.arange(0, max_len).float().unsqueeze(1)
+        div_term = (torch.arange(0, d_model, 2).float()
+                    * -(math.log(10000.0) / d_model)).exp()
+
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+
+        pe = pe.unsqueeze(0)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        return self.pe[:, :x.size(1)]
+
+class LearnablePositionalEmbedding(nn.Module):
+    def __init__(self, d_model, max_len=200):
+        super(LearnablePositionalEmbedding, self).__init__()
+        self.pe = nn.Parameter(torch.zeros(1, max_len, d_model))
+
+    def forward(self, x):
+        return self.pe[:, :x.size(1)]

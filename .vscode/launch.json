@@ -32,6 +32,7 @@
                 "--learning_rate", "0.001",
                 "--patience", "3",
                 "--n_heads","4",
+                "--noEx"
             ]
         }
     ]
