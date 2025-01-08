@@ -195,8 +195,11 @@ class Exp_Long_Term_Forecast(Exp_Basic):
             print('loading model')
             self.model.load_state_dict(torch.load(os.path.join('./checkpoints/' + setting, 'checkpoint.pth')))
 
-        weights = self.model.en_patch_embedding.value_embedding.weight.data.cpu().numpy()
-        np.save('patch_weights.npy', weights)
+        # weights = self.model.en_weights.data.cpu().numpy()
+        # np.save('en_weights.npy', weights)
+
+        weights = self.model.de_weights.data.cpu().numpy()
+        np.save('de_weights.npy', weights)
 
         preds = []
         trues = []

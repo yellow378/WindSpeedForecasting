@@ -45,11 +45,13 @@ class Model(nn.Module):
 
         # Patch
         self.trend_embedding = PatchEmbedding(
-            self.d_model, self.patch_len, self.stride, self.padding, self.dropout
+            self.d_model // 4 * 1 , self.patch_len, self.stride, self.padding, self.dropout
         )
         self.en_patch_embedding = PatchEmbedding(
-            self.d_model, self.patch_len, self.stride, self.padding, self.dropout
+            self.d_model // 4 * 3, self.patch_len, self.stride, self.padding, self.dropout
         )
+        # self.en_weights = nn.Parameter(torch.ones(self.patch_num,self.d_model))
+        self.de_weights = nn.Parameter(torch.zeros(self.pred_len,self.d_model))
         if not self.noEx:
             self.ex_patch_embedding = PatchEmbedding(
                 self.d_model + 64,
@@ -59,7 +61,7 @@ class Model(nn.Module):
                 self.dropout,
             )
 
-        self.global_position_embedding = LearnablePositionalEmbedding(self.patch_num)
+        #self.global_position_embedding = LearnablePositionalEmbedding(self.patch_num)
         # 线性运算
         if self.noEx:
             self.linear1 = nn.Linear(self.patch_num, self.n_heads)
@@ -71,7 +73,7 @@ class Model(nn.Module):
         # Decoder
         self.decoder_TimeExpend = nn.Linear(self.n_heads, self.pred_len)
         # self.decoder_batchNormal = nn.BatchNorm1d(self.d_model)
-        self.decoder_varShrink = nn.Linear((self.d_model + self.d_model), self.c_out)
+        self.decoder_varShrink = nn.Linear((self.d_model), self.c_out)
 
     def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask=None):
         if (
@@ -162,14 +164,14 @@ class Model(nn.Module):
 
         trend_out, n_vars = self.trend_embedding(trend_init)
         trend_out = trend_out.permute(0, 2, 1)
-        # [batch_size, 16, patch_num]
-
+        # # [batch_size, 16, patch_num]
         x_en_out, n_vars = self.en_patch_embedding(seasonal_init)
         x_en_out = x_en_out.permute(0, 2, 1)
         # [batch_size, d_model, patch_num]
 
         x_en_out = torch.cat([x_en_out, trend_out], dim=1)
-        x_en_out = x_en_out + self.global_position_embedding(x_en_out)
+        # x_en_out = x_en_out * self.en_weights.permute(1,0)
+        # x_en_out = x_en_out * self.global_position_embedding(x_en_out)
 
         return x_en_out
 
@@ -181,6 +183,7 @@ class Model(nn.Module):
         dec_out = F.sigmoid(dec_out)
         dec_out = dec_out.permute(0, 2, 1)
         # [batch_size, pred_len, d_model]
+        dec_out = dec_out + self.de_weights
         dec_out = self.decoder_varShrink(dec_out)
         # [batch_size, pred_len, c_out]
         return dec_out
@@ -239,7 +242,7 @@ class PositionalEmbedding(nn.Module):
 
 
 class LearnablePositionalEmbedding(nn.Module):
-    def __init__(self, d_model, max_len=300):
+    def __init__(self, d_model, max_len=1500):
         super(LearnablePositionalEmbedding, self).__init__()
         self.pe = nn.Parameter(torch.zeros(max_len, d_model))
 
