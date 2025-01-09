@@ -200,8 +200,16 @@ mse:4.533166700225755, mae:1.5346929168332262
 
  -----
 
-python -u run.py             --is_training 1             --root_path ./dataset/processed             --data_path Turb1.csv             --model_id Wind_LightTime_36_36             --model LightTime             --task_name long_term_forecast             --data custom             --features MS             --target Wspd             --seq_len 432             --label_len 0             --pred_len 36             --enc_in 10             --dec_in 10             --c_out 1             --d_model 128             --n_heads 16             --patch_len 18             --strid 9             --dropout 0.1             --train_epochs 40             --patience 3                  --loss mse             --use_gpu True             --inverse             --itr 1 --batch_size 64 --learning_rate 0.001 --noEx --moving_avg 17
+python -u run.py --is_training 1 --root_path ./dataset/processed --data_path Turb1.csv --model_id Wind_LightTime_36_36 --model LightTime --task_name long_term_forecast --data custom --features MS --target Wspd --seq_len 432 --label_len 0 --pred_len 36 --enc_in 10 --dec_in 10 --c_out 1 --d_model 128 --n_heads 16  --patch_len 18 --strid 9 --dropout 0.1 --train_epochs 40 --patience 3 --loss mse --use_gpu True --inverse --itr 1 --batch_size 64 --learning_rate 0.001 --noEx --moving_avg 17
 (128+128)
 mse:4.4998948554872245, mae:1.5220851372248028
 
 
+python -u run.py --is_training 1 --root_path ./dataset/processed --data_path Turb1.csv --model_id Wind_LightTime_36_36 --model LightTime --task_name long_term_forecast --data custom --features MS --target Wspd --seq_len 432 --label_len 0 --pred_len 36 --enc_in 10 --dec_in 10 --c_out 1 --d_model 256 --n_heads 16  --patch_len 128 --strid 9 --dropout 0.1 --train_epochs 40 --patience 3 --loss mse --use_gpu True --inverse --itr 1 --batch_size 64 --learning_rate 0.001 --noEx --moving_avg 17
+(L1Loss)
+mse:4.5563729676732105, mae:1.5209404548732701
+
+
+python -u run.py --is_training 1 --root_path ./dataset/processed --data_path Turb1.csv --model_id Wind_LightTime_36_36 --model LightTime --task_name long_term_forecast --data custom --features MS --target Wspd --seq_len 432 --label_len 0 --pred_len 36 --enc_in 10 --dec_in 10 --c_out 1 --d_model 128 --n_heads 32  --patch_len 128 --strid 9 --dropout 0.1 --train_epochs 40 --patience 3 --loss mse --use_gpu True --inverse --itr 1 --batch_size 64 --learning_rate 0.001 --noEx --moving_avg 17
+(new)
+mse:4.42108653941794, mae:1.4910946747171494

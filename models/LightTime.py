@@ -51,7 +51,7 @@ class Model(nn.Module):
             self.d_model // 4 * 3, self.patch_len, self.stride, self.padding, self.dropout
         )
         # self.en_weights = nn.Parameter(torch.ones(self.patch_num,self.d_model))
-        self.de_weights = nn.Parameter(torch.zeros(self.pred_len,self.d_model))
+        # self.de_weights = nn.Parameter(torch.zeros(self.pred_len,self.d_model))
         if not self.noEx:
             self.ex_patch_embedding = PatchEmbedding(
                 self.d_model + 64,
@@ -69,6 +69,9 @@ class Model(nn.Module):
             self.linear1 = nn.Linear(
                 self.patch_num + (self.enc_in - 1) * 2, self.n_heads
             )
+        self.linearBlocks = nn.Sequential(
+            *[LinearBlock(self.d_model,self.n_heads,self.dropout) for _ in range(3)]
+        )
 
         # Decoder
         self.decoder_TimeExpend = nn.Linear(self.n_heads, self.pred_len)
@@ -136,7 +139,8 @@ class Model(nn.Module):
         # enc_out = enc_out.permute(0,2,1)
 
         enc_out = self.linear1(enc_out)
-        enc_out = F.sigmoid(enc_out)
+        enc_out = F.sigmoid(enc_out).permute(0, 2, 1)
+        enc_out = self.linearBlocks(enc_out)
         # [batch_size, n_heads, d_model]
         return enc_out
 
@@ -177,17 +181,31 @@ class Model(nn.Module):
 
     def decoder(self, enc_out):
         # [batch_size, n_heads, d_model]
-        # dec_out = enc_out.permute(0,2,1)
-        dec_out = self.decoder_TimeExpend(enc_out)
+        dec_out = enc_out.permute(0,2,1)
+        dec_out = self.decoder_TimeExpend(dec_out)
         dec_out = F.dropout(dec_out, self.dropout)
         dec_out = F.sigmoid(dec_out)
         dec_out = dec_out.permute(0, 2, 1)
         # [batch_size, pred_len, d_model]
-        dec_out = dec_out + self.de_weights
+        dec_out = dec_out# + self.de_weights
         dec_out = self.decoder_varShrink(dec_out)
         # [batch_size, pred_len, c_out]
         return dec_out
 
+class LinearBlock(nn.Module):
+    def __init__(self,d_model,n_heads,dropout):
+        super(LinearBlock,self).__init__()
+        self.linear1 = nn.Linear(d_model,d_model)
+        self.linear2 = nn.Linear(n_heads,n_heads)
+        self.dropout = dropout
+
+    def forward(self,x):
+        out = self.linear1(x)
+        out = F.sigmoid(out).permute(0, 2, 1)
+        out = F.dropout(out, self.dropout) 
+        out = self.linear2(out)
+        out = F.sigmoid(out).permute(0, 2,1)
+        return out+x
 
 class PatchEmbedding(nn.Module):
     def __init__(self, d_model, patch_len, stride, padding, dropout):
@@ -198,7 +216,7 @@ class PatchEmbedding(nn.Module):
         self.padding_patch_layer = nn.ReplicationPad1d((0, padding))
 
         # Backbone, Input encoding: projection of feature vectors onto a d-dim vector space
-        self.value_embedding = nn.Linear(patch_len, d_model, bias=False)
+        self.value_embedding = nn.Linear(patch_len, d_model, bias=True)
 
         # Positional embedding
         # self.position_embedding = PositionalEmbedding(d_model)

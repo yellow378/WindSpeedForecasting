@@ -39,7 +39,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         return model_optim
 
     def _select_criterion(self):
-        criterion = nn.MSELoss()
+        criterion = nn.L1Loss()
         #criterion = SoftDTW(gamma=1.0, normalize=True)
         return criterion
 
