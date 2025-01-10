@@ -70,7 +70,7 @@ class Model(nn.Module):
                 self.patch_num + (self.enc_in - 1) * 2, self.n_heads
             )
         self.linearBlocks = nn.Sequential(
-            *[LinearBlock(self.d_model,self.n_heads,self.dropout) for _ in range(3)]
+            *[LinearBlock(self.d_model,self.n_heads,self.dropout) for _ in range(2)]
         )
 
         # Decoder
@@ -197,6 +197,7 @@ class LinearBlock(nn.Module):
         super(LinearBlock,self).__init__()
         self.linear1 = nn.Linear(d_model,d_model)
         self.linear2 = nn.Linear(n_heads,n_heads)
+        self.norm = nn.LayerNorm(d_model)
         self.dropout = dropout
 
     def forward(self,x):
@@ -205,6 +206,7 @@ class LinearBlock(nn.Module):
         out = F.dropout(out, self.dropout) 
         out = self.linear2(out)
         out = F.sigmoid(out).permute(0, 2,1)
+        out = self.norm(out)
         return out+x
 
 class PatchEmbedding(nn.Module):
@@ -217,9 +219,6 @@ class PatchEmbedding(nn.Module):
 
         # Backbone, Input encoding: projection of feature vectors onto a d-dim vector space
         self.value_embedding = nn.Linear(patch_len, d_model, bias=True)
-
-        # Positional embedding
-        # self.position_embedding = PositionalEmbedding(d_model)
 
         # Residual dropout
         self.dropout = nn.Dropout(dropout)

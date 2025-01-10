@@ -198,8 +198,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         # weights = self.model.en_weights.data.cpu().numpy()
         # np.save('en_weights.npy', weights)
 
-        weights = self.model.de_weights.data.cpu().numpy()
-        np.save('de_weights.npy', weights)
+        # weights = self.model.de_weights.data.cpu().numpy()
+        # np.save('de_weights.npy', weights)
 
         preds = []
         trues = []
