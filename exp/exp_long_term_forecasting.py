@@ -252,8 +252,10 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     expanded_outputs[:, :, -1] = outputs[:, :, -1]
                     expanded_outputs[:, :, 0:-1] = batch_y[:, :, 0:-1]
                     outputs = expanded_outputs
-                    outputs = test_data.inverse_transform(outputs.squeeze(0))[:,-1:].reshape(shape)
-                    batch_y = test_data.inverse_transform(batch_y.squeeze(0))[:,-1:].reshape(shape)
+                    # outputs = test_data.inverse_transform(outputs.squeeze(0))[:,-1:].reshape(shape)
+                    # batch_y = test_data.inverse_transform(batch_y.squeeze(0))[:,-1:].reshape(shape)
+                    outputs = test_data.inverse_transform(outputs.reshape(shape[0]*shape[1],shape[2]*10))[:,-1:].reshape(shape)
+                    batch_y = test_data.inverse_transform(batch_y.reshape(shape[0]*shape[1],shape[2]*10))[:,-1:].reshape(shape)
         
                 outputs = outputs[:, :, f_dim:]
                 batch_y = batch_y[:, :, f_dim:]
@@ -273,14 +275,14 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
                 preds.append(pred)
                 trues.append(true)
-                if i % 20 == 0:
-                    input = batch_x.detach().cpu().numpy()
-                    if test_data.scale and self.args.inverse:
-                        shape = input.shape
-                        input = test_data.inverse_transform(input.squeeze(0)).reshape(shape)
-                    gt = np.concatenate((input[0, :, -1], true[0, :, -1]), axis=0)
-                    pd = np.concatenate((input[0, :, -1], pred[0, :, -1]), axis=0)
-                    visual(gt, pd, os.path.join(folder_path, str(i) + '.pdf'))
+                # if i % 20 == 0:
+                #     input = batch_x.detach().cpu().numpy()
+                #     if test_data.scale and self.args.inverse:
+                #         shape = input.shape
+                #         input = test_data.inverse_transform(input.squeeze(0)).reshape(shape)
+                #     gt = np.concatenate((input[0, :, -1], true[0, :, -1]), axis=0)
+                #     pd = np.concatenate((input[0, :, -1], pred[0, :, -1]), axis=0)
+                #     visual(gt, pd, os.path.join(folder_path, str(i) + '.pdf'))
 
         preds = np.array(preds)
         trues = np.array(trues)
