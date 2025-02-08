@@ -71,9 +71,9 @@ class Model(nn.Module):
 
         # 线性运算
         self.linear2 = nn.Linear(self.model, self.d_model)
-        self.linearBlocks = nn.Sequential(
-            *[LinearBlock(self.d_model,self.n_heads,self.dropout) for _ in range(2)]
-        )
+        # self.linearBlocks = nn.Sequential(
+        #     *[LinearBlock(self.d_model,self.n_heads,self.dropout) for _ in range(2)]
+        # )
 
         # Decoder
         self.decoder_TimeExpend = nn.Linear(self.n_heads, self.pred_len)
