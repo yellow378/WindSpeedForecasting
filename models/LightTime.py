@@ -11,7 +11,8 @@ class Model(nn.Module):
         self.seq_len = configs.seq_len
 
         self.d_model = configs.d_model
-        self.model = (configs.d_model * 2) if configs.noEx else (configs.d_model * 3)
+        self.ex_model = configs.d_model
+        self.model = (configs.d_model * 2) if configs.noEx else (configs.d_model * 2 + self.ex_model)
         print(f"model: {self.model}")
         
         self.enc_in = configs.enc_in
@@ -59,13 +60,13 @@ class Model(nn.Module):
 
         if not self.noEx:
             self.ex_patch_embedding = PatchEmbedding(
-                self.d_model,
+                self.ex_model,
                 self.patch_len,
                 self.stride,
                 self.padding,
                 self.dropout,
             )
-            self.ex_projection = nn.Linear(self.d_model * (self.enc_in-1), self.d_model)
+            self.ex_projection = nn.Linear(self.ex_model * (self.enc_in-1), self.ex_model)
             self.ex_drop = nn.Dropout(self.dropout)
             self.ex_linear = nn.Linear(self.patch_num, self.n_heads)
 
@@ -151,14 +152,14 @@ class Model(nn.Module):
         ex_out, n_vars = self.ex_patch_embedding(x_ex)
         # [batch_size*n_vars, patch_num, d_model]
         batch_size = x_ex.size(0)
-        ex_out = ex_out.reshape([batch_size, -1, self.d_model*n_vars]).permute(0,2,1)
+        ex_out = ex_out.reshape([batch_size, -1, self.ex_model*n_vars]).permute(0,2,1)
         ex_out = self.ex_linear(ex_out)
         ex_out = F.sigmoid(ex_out)
         # [batch_size,self.d_model*n_vars, n_heads]
         ex_out = self.ex_projection(ex_out.permute(0,2,1))
         ex_out = F.sigmoid(ex_out)
         ex_out = self.ex_drop(ex_out)
-        return ex_out, self.d_model*n_vars
+        return ex_out, self.ex_model*n_vars
 
     def x_en_encoder(self, x_en):
         # [batch_size, seq_len, 1]
