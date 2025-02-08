@@ -11,8 +11,7 @@ class Model(nn.Module):
         self.seq_len = configs.seq_len
 
         self.d_model = configs.d_model
-        self.ex_model = configs.d_model
-        self.model = (configs.d_model // 2) if configs.noEx else (configs.d_model)
+        self.model = (configs.d_model * 2) if configs.noEx else (configs.d_model * 3)
         print(f"model: {self.model}")
         
         self.enc_in = configs.enc_in
@@ -28,7 +27,7 @@ class Model(nn.Module):
         self.patch_len = configs.patch_len
         self.padding = self.stride
         self.patch_num = (
-            (self.seq_len+1)//2 + self.stride * 2 - self.patch_len
+            self.seq_len+1 + self.stride * 2 - self.patch_len
         ) // self.stride
 
 
@@ -46,35 +45,31 @@ class Model(nn.Module):
 
         # 趋势分解
         self.decompsition = series_decomp(configs.moving_avg)
-        
-        # 卷积层 对参数很敏感
-        self.en_trend_conv = nn.Conv1d(1, 1, self.pred_len+1, 2, (self.pred_len)//2)
-        self.en_seasonal_conv = nn.Conv1d(1, 1, self.pred_len+1, 2, (self.pred_len)//2)
-        self.en_global_conv = nn.Conv1d(self.patch_num, self.patch_num, self.pred_len+1, 2, (self.pred_len)//2)
-        if not self.noEx:
-            self.ex_conv = nn.Conv1d(self.enc_in-1, self.enc_in-1, self.pred_len+1, 2, (self.pred_len)//2)
-            self.ex_global_conv = nn.Conv1d(self.patch_num, self.patch_num, self.pred_len+1, 2, (self.pred_len)//2)
 
         # Patch
         self.trend_embedding = PatchEmbedding(
-            self.d_model // 4 * 1 , self.patch_len, self.stride, self.padding, self.dropout
+            self.d_model, self.patch_len, self.stride, self.padding, self.dropout
         )
         self.en_patch_embedding = PatchEmbedding(
-            self.d_model // 4 * 3, self.patch_len, self.stride, self.padding, self.dropout
+            self.d_model, self.patch_len, self.stride, self.padding, self.dropout
         )
+        self.trend_linear = nn.Linear(self.patch_num,self.n_heads)
+        self.seasaonal_linear = nn.Linear(self.patch_num,self.n_heads)
+        self.en_drop = nn.Dropout(self.dropout)
 
         if not self.noEx:
             self.ex_patch_embedding = PatchEmbedding(
-                self.ex_model,
+                self.d_model,
                 self.patch_len,
                 self.stride,
                 self.padding,
                 self.dropout,
             )
-            self.ex_projection = nn.Linear(self.ex_model * (self.enc_in-1) // 2, self.d_model //2)
+            self.ex_projection = nn.Linear(self.d_model * (self.enc_in-1), self.d_model)
+            self.ex_drop = nn.Dropout(self.dropout)
+            self.ex_linear = nn.Linear(self.patch_num, self.n_heads)
 
         # 线性运算
-        self.linear1 = nn.Linear(self.patch_num, self.n_heads)
         self.linear2 = nn.Linear(self.model, self.d_model)
         self.linearBlocks = nn.Sequential(
             *[LinearBlock(self.d_model,self.n_heads,self.dropout) for _ in range(2)]
@@ -124,7 +119,7 @@ class Model(nn.Module):
         x_ex = x_enc[:, :, 0:-1]
         
         # Step2: 处理External变量
-        # [batch_size,self.ex_model*n_vars, patch_num]
+        # [batch_size,self.d_model*n_vars, patch_num]
         ex_out = None
         if not self.noEx:
             ex_out, n_vars = self.x_ex_encoder(x_ex)
@@ -137,57 +132,33 @@ class Model(nn.Module):
 
         #Step4: External和Endogenous融合
         if not self.noEx:
-            ex_out = ex_out.permute(0, 2, 1)  
-            ex_out = F.relu(self.ex_projection(ex_out))  
-            en_out = en_out.permute(0, 2, 1)  
-
             enc_out = torch.cat([ex_out, en_out], dim=-1)  
-            enc_out = enc_out.permute(0, 2, 1)  
         else:
             enc_out = en_out
-        # Step4: 使用注意力机制融合External和Endogenous变量
-        # if not self.noEx:
-        #     # 调整维度以适应注意力计算
-        #     ex_out = ex_out.permute(0, 2, 1)  # [batch_size, patch_num, ex_model*n_vars]
-        #     ex_out = F.relu(self.ex_projection(ex_out))  # [batch_size, patch_num, d_model]
-        #     en_out = en_out.permute(0, 2, 1)  # [batch_size, patch_num, d_model]
 
-        #     # 计算注意力权重
-        #     attention_scores = torch.bmm(en_out, ex_out.transpose(1, 2))  # [batch_size, patch_num, ex_model*n_vars]
-        #     attention_weights = F.softmax(attention_scores, dim=-1)  # [batch_size, patch_num, ex_model*n_vars]
-        #     print(attention_weights)
-
-        #     # 应用注意力权重加权外生特征
-        #     weighted_ex_out = torch.bmm(attention_weights, ex_out)  # [batch_size, patch_num, d_model]
-
-        #     # 融合内生和加权后的外生特征
-        #     enc_out = torch.cat([weighted_ex_out, en_out], dim=-1)  # [batch_size, patch_num, d_model + d_model]
-        #     enc_out = enc_out.permute(0, 2, 1)  # [batch_size, d_model + d_model, patch_num]
-        # else:
-        #     enc_out = en_out
-
-        # Step4: 线性运算
-        enc_out = self.linear1(enc_out).permute(0, 2, 1)
-        enc_out = F.sigmoid(enc_out)
-        enc_out = F.dropout(enc_out, self.dropout)
+        # Step5: 线性运算
         enc_out = self.linear2(enc_out)
         enc_out = F.sigmoid(enc_out)
+        enc_out - self.en_drop(enc_out)
         # [batch_size, n_heads, d_model]
-        enc_out = self.linearBlocks(enc_out)
+        #enc_out = self.linearBlocks(enc_out)
         # [batch_size, n_heads, d_model]
         return enc_out
 
     def x_ex_encoder(self, x_ex):
         # [batch_size, patch_len, enc_in-1]
         x_ex = x_ex.permute(0, 2, 1)
-        x_ex = self.ex_conv(x_ex)
         ex_out, n_vars = self.ex_patch_embedding(x_ex)
-        # [batch_size*n_vars, d_model, patch_num]
+        # [batch_size*n_vars, patch_num, d_model]
         batch_size = x_ex.size(0)
-        ex_out = ex_out.reshape([batch_size, self.ex_model*n_vars, -1])
-        # [batch_size,self.ex_model*n_vars, patch_num]
-        ex_out = self.ex_global_conv(ex_out.permute(0,2,1)).permute(0,2,1)
-        return ex_out, self.ex_model*n_vars
+        ex_out = ex_out.reshape([batch_size, -1, self.d_model*n_vars]).permute(0,2,1)
+        ex_out = self.ex_linear(ex_out)
+        ex_out = F.sigmoid(ex_out)
+        # [batch_size,self.d_model*n_vars, n_heads]
+        ex_out = self.ex_projection(ex_out.permute(0,2,1))
+        ex_out = F.sigmoid(ex_out)
+        ex_out = self.ex_drop(ex_out)
+        return ex_out, self.d_model*n_vars
 
     def x_en_encoder(self, x_en):
         # [batch_size, seq_len, 1]
@@ -198,14 +169,12 @@ class Model(nn.Module):
             trend_init.permute(0, 2, 1),
         )
 
-        trend_out = self.en_trend_conv(trend_init)
-        trend_out, n_vars = self.trend_embedding(trend_out)
-        
-        x_en_out = self.en_seasonal_conv(seasonal_init)
-        x_en_out, n_vars = self.en_patch_embedding(x_en_out)
-
-        x_en_out = torch.cat([x_en_out, trend_out], dim=-1)
-        x_en_out = self.en_global_conv(x_en_out).permute(0,2,1)
+        trend_out, n_vars = self.trend_embedding(trend_init)
+        trend_out = F.sigmoid(self.trend_linear(trend_out.permute(0,2,1))).permute(0,2,1)
+        x_en_out, n_vars = self.en_patch_embedding(seasonal_init)
+        x_en_out = F.sigmoid(self.seasaonal_linear(x_en_out.permute(0,2,1))).permute(0,2,1)
+        x_en_out = torch.cat([trend_out,x_en_out],dim=-1)
+        x_en_out = self.en_drop(x_en_out)
 
         return x_en_out
 
@@ -228,14 +197,15 @@ class LinearBlock(nn.Module):
         self.linear1 = nn.Linear(d_model,d_model)
         self.linear2 = nn.Linear(n_heads,n_heads)
         self.norm = nn.LayerNorm(d_model)
-        self.dropout = dropout
+        self.drop = nn.Dropout(dropout)
 
     def forward(self,x):
         out = self.linear1(x)
         out = F.sigmoid(out).permute(0, 2, 1)
-        out = F.dropout(out, self.dropout) 
+        out = self.drop(out) 
         out = self.linear2(out)
         out = F.sigmoid(out).permute(0, 2,1)
+        out = self.drop(out)
         out = self.norm(out)
         return out+x
 
@@ -246,23 +216,21 @@ class PatchEmbedding(nn.Module):
         self.patch_len = patch_len
         self.stride = stride
         self.padding_patch_layer = nn.ReplicationPad1d((0, padding))
+        self.dropout = dropout
 
         # Backbone, Input encoding: projection of feature vectors onto a d-dim vector space
-        self.value_embedding = nn.Linear(patch_len, d_model, bias=True)
-
-        # Residual dropout
-        self.dropout = nn.Dropout(dropout)
+        self.value_embedding1 = nn.Linear(patch_len, d_model, bias=True)
+        self.drop = nn.Dropout(dropout)
 
     def forward(self, x):
-        # do patching
         n_vars = x.shape[1]
         x = self.padding_patch_layer(x)
         x = x.unfold(dimension=-1, size=self.patch_len, step=self.stride)
         x = torch.reshape(x, (x.shape[0] * x.shape[1], x.shape[2], x.shape[3]))
         # Input encoding
-        x = self.value_embedding(x)  # + self.position_embedding(x)
+        x = self.value_embedding1(x) 
         x = F.sigmoid(x)
-        x = self.dropout(x)
+        x = self.drop(x)
         return x, n_vars
 
 class series_decomp(nn.Module):
