@@ -1218,3 +1218,6 @@ mse:4.436113942538082, mae:1.4702612578763838
 long_term_forecast_Wind_LightTime_36_36_LightTime_custom_ftMS_sl72_ll0_pl36_dm120_nh12_el2_dl1_df2048_fc1_ebtimeF_dtTrue_test_0  
 mse:4.3973817325505795, mae:1.4627879067370764
 
+long_term_forecast_Wind_LightTime_36_36_LightTime_custom_ftMS_sl432_ll0_pl36_dm120_nh16_el2_dl1_df2048_fc1_ebtimeF_dtTrue_test_0  
+mse:4.260845968313011, mae:1.4647871743491714
+

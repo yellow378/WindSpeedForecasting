@@ -12,25 +12,28 @@ class Model(nn.Module):
 
         self.d_model = configs.d_model
         self.ex_model = configs.d_model
-        self.model = (configs.d_model * 2) if configs.noEx else (configs.d_model * 2 + self.ex_model)
+        self.model = (
+            (configs.d_model * 2)
+            if configs.noEx
+            else (configs.d_model * 2 + self.ex_model)
+        )
         print(f"model: {self.model}")
-        
+
         self.enc_in = configs.enc_in
         self.c_out = configs.c_out
-        
+
         self.dropout = configs.dropout
         self.d_ff = configs.d_ff
         self.n_heads = configs.n_heads
-        
+
         self.noEx = configs.noEx
 
         self.stride = configs.stride
         self.patch_len = configs.patch_len
         self.padding = self.stride
         self.patch_num = (
-            self.seq_len+1 + self.stride * 2 - self.patch_len
+            self.seq_len + 1 + self.stride * 2 - self.patch_len
         ) // self.stride
-
 
         if (
             self.task_name == "classification"
@@ -42,8 +45,6 @@ class Model(nn.Module):
         else:
             self.pred_len = configs.pred_len
 
-        
-
         # 趋势分解
         self.decompsition = series_decomp(configs.moving_avg)
 
@@ -54,8 +55,8 @@ class Model(nn.Module):
         self.en_patch_embedding = PatchEmbedding(
             self.d_model, self.patch_len, self.stride, self.padding, self.dropout
         )
-        self.trend_linear = nn.Linear(self.patch_num,self.n_heads)
-        self.seasaonal_linear = nn.Linear(self.patch_num,self.n_heads)
+        self.trend_linear = nn.Linear(self.patch_num, self.n_heads)
+        self.seasaonal_linear = nn.Linear(self.patch_num, self.n_heads)
         self.en_drop = nn.Dropout(self.dropout)
 
         if not self.noEx:
@@ -66,7 +67,9 @@ class Model(nn.Module):
                 self.padding,
                 self.dropout,
             )
-            self.ex_projection = nn.Linear(self.ex_model * (self.enc_in-1), self.ex_model)
+            self.ex_projection = nn.Linear(
+                self.ex_model * (self.enc_in - 1), self.ex_model
+            )
             self.ex_drop = nn.Dropout(self.dropout)
             self.ex_linear = nn.Linear(self.patch_num, self.n_heads)
 
@@ -81,7 +84,10 @@ class Model(nn.Module):
         self.decoder_varShrink = nn.Linear((self.d_model), self.c_out)
 
     def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask=None):
-        if (self.task_name == "long_term_forecast" or self.task_name == "short_term_forecast"):
+        if (
+            self.task_name == "long_term_forecast"
+            or self.task_name == "short_term_forecast"
+        ):
             dec_out = self.forecast(x_enc)
             return dec_out[:, -self.pred_len :, :]  # [B, L, D]
         else:
@@ -118,22 +124,20 @@ class Model(nn.Module):
         # [batch_size, enc_in, seq_len]
         x_en = x_enc[:, :, -1:]
         x_ex = x_enc[:, :, 0:-1]
-        
+
         # Step2: 处理External变量
         # [batch_size,self.d_model*n_vars, patch_num]
         ex_out = None
         if not self.noEx:
             ex_out, n_vars = self.x_ex_encoder(x_ex)
-        
-        
+
         # Step3: 处理Endogenous变量
         # [batch_size, d_model, patch_num]
         en_out = self.x_en_encoder(x_en)
-        
 
-        #Step4: External和Endogenous融合
+        # Step4: External和Endogenous融合
         if not self.noEx:
-            enc_out = torch.cat([ex_out, en_out], dim=-1)  
+            enc_out = torch.cat([ex_out, en_out], dim=-1)
         else:
             enc_out = en_out
 
@@ -142,7 +146,7 @@ class Model(nn.Module):
         enc_out = F.sigmoid(enc_out)
         enc_out - self.en_drop(enc_out)
         # [batch_size, n_heads, d_model]
-        #enc_out = self.linearBlocks(enc_out)
+        # enc_out = self.linearBlocks(enc_out)
         # [batch_size, n_heads, d_model]
         return enc_out
 
@@ -152,14 +156,16 @@ class Model(nn.Module):
         ex_out, n_vars = self.ex_patch_embedding(x_ex)
         # [batch_size*n_vars, patch_num, d_model]
         batch_size = x_ex.size(0)
-        ex_out = ex_out.reshape([batch_size, -1, self.ex_model*n_vars]).permute(0,2,1)
+        ex_out = ex_out.reshape([batch_size, -1, self.ex_model * n_vars]).permute(
+            0, 2, 1
+        )
         ex_out = self.ex_linear(ex_out)
         ex_out = F.sigmoid(ex_out)
         # [batch_size,self.d_model*n_vars, n_heads]
-        ex_out = self.ex_projection(ex_out.permute(0,2,1))
+        ex_out = self.ex_projection(ex_out.permute(0, 2, 1))
         ex_out = F.sigmoid(ex_out)
         ex_out = self.ex_drop(ex_out)
-        return ex_out, self.ex_model*n_vars
+        return ex_out, self.ex_model * n_vars
 
     def x_en_encoder(self, x_en):
         # [batch_size, seq_len, 1]
@@ -171,44 +177,50 @@ class Model(nn.Module):
         )
 
         trend_out, n_vars = self.trend_embedding(trend_init)
-        trend_out = F.sigmoid(self.trend_linear(trend_out.permute(0,2,1))).permute(0,2,1)
+        trend_out = F.sigmoid(self.trend_linear(trend_out.permute(0, 2, 1))).permute(
+            0, 2, 1
+        )
         x_en_out, n_vars = self.en_patch_embedding(seasonal_init)
-        x_en_out = F.sigmoid(self.seasaonal_linear(x_en_out.permute(0,2,1))).permute(0,2,1)
-        x_en_out = torch.cat([trend_out,x_en_out],dim=-1)
+        x_en_out = F.sigmoid(self.seasaonal_linear(x_en_out.permute(0, 2, 1))).permute(
+            0, 2, 1
+        )
+        x_en_out = torch.cat([trend_out, x_en_out], dim=-1)
         x_en_out = self.en_drop(x_en_out)
 
         return x_en_out
 
     def decoder(self, enc_out):
         # [batch_size, n_heads, d_model]
-        dec_out = enc_out.permute(0,2,1)
+        dec_out = enc_out.permute(0, 2, 1)
         dec_out = self.decoder_TimeExpend(dec_out)
         dec_out = F.dropout(dec_out, self.dropout)
         dec_out = F.sigmoid(dec_out)
         dec_out = dec_out.permute(0, 2, 1)
         # [batch_size, pred_len, d_model]
-        dec_out = dec_out# + self.de_weights
+        dec_out = dec_out  # + self.de_weights
         dec_out = self.decoder_varShrink(dec_out)
         # [batch_size, pred_len, c_out]
         return dec_out
 
+
 class LinearBlock(nn.Module):
-    def __init__(self,d_model,n_heads,dropout):
-        super(LinearBlock,self).__init__()
-        self.linear1 = nn.Linear(d_model,d_model)
-        self.linear2 = nn.Linear(n_heads,n_heads)
+    def __init__(self, d_model, n_heads, dropout):
+        super(LinearBlock, self).__init__()
+        self.linear1 = nn.Linear(d_model, d_model)
+        self.linear2 = nn.Linear(n_heads, n_heads)
         self.norm = nn.LayerNorm(d_model)
         self.drop = nn.Dropout(dropout)
 
-    def forward(self,x):
+    def forward(self, x):
         out = self.linear1(x)
         out = F.sigmoid(out).permute(0, 2, 1)
-        out = self.drop(out) 
+        out = self.drop(out)
         out = self.linear2(out)
-        out = F.sigmoid(out).permute(0, 2,1)
+        out = F.sigmoid(out).permute(0, 2, 1)
         out = self.drop(out)
         out = self.norm(out)
-        return out+x
+        return out + x
+
 
 class PatchEmbedding(nn.Module):
     def __init__(self, d_model, patch_len, stride, padding, dropout):
@@ -229,10 +241,11 @@ class PatchEmbedding(nn.Module):
         x = x.unfold(dimension=-1, size=self.patch_len, step=self.stride)
         x = torch.reshape(x, (x.shape[0] * x.shape[1], x.shape[2], x.shape[3]))
         # Input encoding
-        x = self.value_embedding1(x) 
+        x = self.value_embedding1(x)
         x = F.sigmoid(x)
         x = self.drop(x)
         return x, n_vars
+
 
 class series_decomp(nn.Module):
     def __init__(self, kernel_size):
@@ -243,7 +256,8 @@ class series_decomp(nn.Module):
         moving_mean = self.moving_avg(x)
         res = x - moving_mean
         return res, moving_mean
-    
+
+
 class moving_avg(nn.Module):
     def __init__(self, kernel_size, stride):
         super(moving_avg, self).__init__()
