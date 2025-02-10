@@ -286,3 +286,28 @@ mse:4.361556325545187, mae:1.4718283162899322
 python -u run.py --is_training 1 --root_path ./dataset/processed --data_path Turb1.csv --model_id Wind_LightTime_36_36 --model LightTime --task_name long_term_forecast --data custom --features MS --target Wspd --seq_len 432 --label_len 0 --pred_len 36 --enc_in 10 --dec_in 10 --c_out 1 --d_model 120 --n_heads 16  --patch_len 108 --strid 54 --dropout 0 --train_epochs 40 --patience 3 --loss mse --use_gpu True --inverse --itr 1 --batch_size 64 --learning_rate 0.001 --moving_avg 111
 mse:4.3823141054812815, mae:1.4766005394368444
 
+
+python -u run.py --is_training 1 --root_path ./dataset/processed --data_path Turb1.csv --model_id Wind_LightTime_36_36 --model LightTime --task_name long_term_forecast --data custom --features MS --target Wspd --seq_len 72 --label_len 0 --pred_len 36 --enc_in 10 --dec_in 10 --c_out 1 --d_model 40 --n_heads 16  --patch_len 36 --strid 2 --dropout 0 --train_epochs 40 --patience 3 --loss mse --use_gpu True --inverse --itr 1 --batch_size 64 --learning_rate 0.001 --moving_avg 71 --noEx
+mse:4.366574562182362, mae:1.456436871402617
+
+
+python -u run.py --is_training 1 --root_path ./dataset/processed --data_path Turb1.csv --model_id Wind_LightTime_36_36 --model LightTime --task_name long_term_forecast --data custom --features MS --target Wspd --seq_len 36 --label_len 0 --pred_len 36 --enc_in 10 --dec_in 10 --c_out 1 --d_model 128 --n_heads 20  --patch_len 30 --strid 4 --dropout 0 --train_epochs 40 --patience 3 --loss mse --use_gpu True --inverse --itr 1 --batch_size 64 --learning_rate 0.001 --moving_avg 35 --noEx
+mse:4.374057299645465, mae:1.455825306200103
+
+
+
+python -u run.py --is_training 1 --root_path ./dataset/processed --data_path Turb1.csv --model_id Wind_LightTime_36_36 --model LightTime --task_name long_term_forecast --data custom --features MS --target Wspd --seq_len 36 --label_len 0 --pred_len 36 --enc_in 10 --dec_in 10 --c_out 1 --d_model 128 --n_heads 32  --patch_len 8 --strid 2 --dropout 0 --train_epochs 40 --patience 3 --loss mse --use_gpu True --inverse --itr 1 --batch_size 64 --learning_rate 0.001 --moving_avg 35
+mse:4.344768415004596, mae:1.4536667011598075
+
+
+python -u run.py --is_training 1 --root_path ./dataset/processed --data_path Turb1.csv --model_id Wind_LightTime_36_36 --model LightTime --task_name long_term_forecast --data custom --features MS --target Wspd --seq_len 36 --label_len 0 --pred_len 36 --enc_in 10 --dec_in 10 --c_out 1 --d_model 60 --n_heads 12  --patch_len 18 --strid 2 --dropout 0 --train_epochs 40 --patience 3 --loss mse --use_gpu True --inverse --itr 1 --batch_size 64 --learning_rate 0.001 --moving_avg 35
+mse:4.333340605459053, mae:1.4493035021696479
+
+
+python -u run.py --is_training 1 --root_path ./dataset/processed --data_path Turb1.csv --model_id Wind_LightTime_36_36 --model LightTime --task_name long_term_forecast --data custom --features MS --target Wspd --seq_len 36 --label_len 0 --pred_len 36 --enc_in 10 --dec_in 10 --c_out 1 --d_model 60 --n_heads 14  --patch_len 18 --strid 2 --dropout 0 --train_epochs 40 --patience 3 --loss mse --use_gpu True --inverse --itr 1 --batch_size 64 --learning_rate 0.001 --moving_avg 35
+mse:4.320630624992556, mae:1.4546239016515896
+
+
+python -u run.py --is_training 1 --root_path ./dataset/processed --data_path Turb1.csv --model_id Wind_LightTime_36_36 --model LightTime --task_name long_term_forecast --data custom --features MS --target Wspd --seq_len 36 --label_len 0 --pred_len 36 --enc_in 10 --dec_in 10 --c_out 1 --d_model 60 --n_heads 14  --patch_len 18 --strid 2 --dropout 0 --train_epochs 40 --patience 3 --loss mse --use_gpu True --inverse --itr 1 --batch_size 64 --learning_rate 0.001 --moving_avg 37
+mse:4.300215224066846, mae:1.4487094704898238
+
