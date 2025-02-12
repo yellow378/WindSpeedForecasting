@@ -315,25 +315,35 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 outputs = outputs.detach().cpu().numpy()
                 batch_y = batch_y.detach().cpu().numpy()
                 if test_data.scale and self.args.inverse:
-                    shape = outputs.shape
-                    expanded_outputs = np.zeros(
-                        (outputs.shape[0], outputs.shape[1], self.args.enc_in)
-                    )
-                    expanded_outputs[:, :, -1] = outputs[:, :, -1]
-                    expanded_outputs[:, :, 0:-1] = batch_y[:, :, 0:-1]
-                    outputs = expanded_outputs
-                    # outputs = test_data.inverse_transform(outputs.squeeze(0))[:,-1:].reshape(shape)
-                    # batch_y = test_data.inverse_transform(batch_y.squeeze(0))[:,-1:].reshape(shape)
+                    shape = batch_y.shape
+                    if outputs.shape[-1] != batch_y.shape[-1]:
+                        outputs = np.tile(
+                            outputs, [1, 1, int(batch_y.shape[-1] / outputs.shape[-1])]
+                        )
                     outputs = test_data.inverse_transform(
-                        outputs.reshape(
-                            shape[0] * shape[1], shape[2] * self.args.enc_in
-                        )
-                    )[:, -1:].reshape(shape)
+                        outputs.reshape(shape[0] * shape[1], -1)
+                    ).reshape(shape)
                     batch_y = test_data.inverse_transform(
-                        batch_y.reshape(
-                            shape[0] * shape[1], shape[2] * self.args.enc_in
-                        )
-                    )[:, -1:].reshape(shape)
+                        batch_y.reshape(shape[0] * shape[1], -1)
+                    ).reshape(shape)
+
+                # if test_data.scale and self.args.inverse:
+                #    shape = outputs.shape
+                #    expanded_outputs = np.zeros(
+                #        (outputs.shape[0], outputs.shape[1], self.args.enc_in)
+                #    )
+                #    expanded_outputs[:, :, -1] = outputs[:, :, -1]
+                #    expanded_outputs[:, :, 0:-1] = batch_y[:, :, 0:-1]
+                #    outputs = expanded_outputs
+                #    # outputs = test_data.inverse_transform(outputs.squeeze(0))[:,-1:].reshape(shape)
+                #    # batch_y = test_data.inverse_transform(batch_y.squeeze(0))[:,-1:].reshape(shape)
+                #    # print(outputs.shape)
+                #    outputs = test_data.inverse_transform(
+                #        outputs.reshape(shape[0] * shape[1], shape[2])
+                #    )[:, -1:].reshape(shape)
+                #    batch_y = test_data.inverse_transform(
+                #        batch_y.reshape(shape[0] * shape[1], self.args.enc_in)
+                #    )[:, -1:].reshape(shape)
 
                 outputs = outputs[:, :, f_dim:]
                 batch_y = batch_y[:, :, f_dim:]

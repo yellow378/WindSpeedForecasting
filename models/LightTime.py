@@ -11,7 +11,7 @@ class Model(nn.Module):
         self.seq_len = configs.seq_len
 
         self.d_model = configs.d_model
-        self.ex_model = configs.d_model
+        self.ex_model = configs.d_model // 4
         self.model = (
             (configs.d_model * 2)
             if configs.noEx
@@ -156,6 +156,9 @@ class Model(nn.Module):
         ex_out, n_vars = self.ex_patch_embedding(x_ex)
         # [batch_size*n_vars, patch_num, d_model]
         batch_size = x_ex.size(0)
+        ex_out = ex_out.reshape([batch_size, n_vars, -1, self.ex_model]).permute(
+            0, 2, 3, 1
+        )
         ex_out = ex_out.reshape([batch_size, -1, self.ex_model * n_vars]).permute(
             0, 2, 1
         )
