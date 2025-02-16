@@ -17,7 +17,7 @@ class Model(nn.Module):
             if configs.noEx
             else (configs.d_model * 2 + self.ex_model)
         )
-        print(f"model: {self.model}")
+        #print(f"model: {self.model}")
 
         self.enc_in = configs.enc_in
         self.c_out = configs.c_out

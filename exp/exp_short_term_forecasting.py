@@ -77,6 +77,7 @@ class Exp_Short_Term_Forecast(Exp_Basic):
                 iter_count += 1
                 model_optim.zero_grad()
                 batch_x = batch_x.float().to(self.device)
+                #print(batch_x.shape)
 
                 batch_y = batch_y.float().to(self.device)
                 batch_y_mark = batch_y_mark.float().to(self.device)
