@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
+import numpy as np
+import pandas as pd
 
 
 class Model(nn.Module):
@@ -169,11 +171,33 @@ class Model(nn.Module):
         ex_out = F.sigmoid(ex_out)
         ex_out = self.ex_drop(ex_out)
         return ex_out, self.ex_model * n_vars
-
     def x_en_encoder(self, x_en):
         # [batch_size, seq_len, 1]
         # Patch 和 Embeding
-        seasonal_init, trend_init = self.decompsition(x_en)
+        original_sequence = x_en  # 保存分解之前的序列
+        seasonal_init, trend_init = self.decompsition(x_en)  # 分解之后的两个序列
+
+        # 保存十组数据
+        if not hasattr(self, 'all_data'):
+            self.all_data = {
+                'original': [],
+                'seasonal': [],
+                'trend': []
+            }
+
+        if len(self.all_data['trend'])  == 0:
+            print(original_sequence[0:2].cpu().numpy().reshape(-1).tolist())
+            self.all_data['original'].extend(original_sequence[0:1].cpu().numpy().reshape(-1).tolist())
+            self.all_data['seasonal'].extend(seasonal_init[0:1].cpu().numpy().reshape(-1).tolist())
+            self.all_data['trend'].extend(trend_init[0:1].cpu().numpy().reshape(-1).tolist())
+            df = pd.DataFrame({
+                'original': self.all_data['original'],
+                'seasonal': self.all_data['seasonal'],
+                'trend': self.all_data['trend']
+            })
+            df.to_csv('series.csv', index=False)
+            print("Data saved successfully")
+
         seasonal_init, trend_init = (
             seasonal_init.permute(0, 2, 1),
             trend_init.permute(0, 2, 1),
