@@ -258,6 +258,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         # seasonals = []
         # trends = []
         # xs = []
+        total_latency = 0.0
+        count = 0
 
         folder_path = "./test_results/" + setting + "/"
         if not os.path.exists(folder_path):
@@ -281,6 +283,9 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     .float()
                     .to(self.device)
                 )
+                if self.device.type == 'cuda':
+                    torch.cuda.synchronize()
+                start_time = time.time()
                 # encoder - decoder
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
@@ -308,6 +313,13 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                             outputs = self.model(
                                 batch_x, batch_x_mark, dec_inp, batch_y_mark
                             )
+                if self.device.type == 'cuda':
+                    torch.cuda.synchronize()
+                end_time = time.time()
+                
+                # 新增：累计延迟
+                total_latency += (end_time - start_time)
+                count += 1
 
                 f_dim = -1 if self.args.features == "MS" else 0
                 outputs = outputs[:, -self.args.pred_len :, :]
@@ -371,6 +383,13 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 #     gt = np.concatenate((input[0, :, -1], true[0, :, -1]), axis=0)
                 #     pd = np.concatenate((input[0, :, -1], pred[0, :, -1]), axis=0)
                 #     visual(gt, pd, os.path.join(folder_path, str(i) + '.pdf'))
+        avg_latency = total_latency / count
+        print(f"\nInference Speed Summary:")
+        print(f"- Total batches: {count}")
+        print(f"- Average latency per batch: {avg_latency:.4f} seconds")
+        print(f"- Throughput: {len(test_loader.dataset)/total_latency:.2f} samples/s")
+
+
 
         preds = np.array(preds)
         trues = np.array(trues)
