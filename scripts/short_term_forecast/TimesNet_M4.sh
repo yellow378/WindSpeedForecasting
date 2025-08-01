@@ -5,10 +5,10 @@ model_name=TimesNet
 python -u run.py \
   --task_name short_term_forecast \
   --is_training 1 \
-  --root_path ./dataset/m4 \
+  --root_path ./dataset/short_term_forecast/m4 \
   --seasonal_patterns 'Monthly' \
   --model_id m4_Monthly \
-  --model $model_name \
+  --model TimesNet \
   --data m4 \
   --features M \
   --e_layers 2 \
