@@ -146,7 +146,7 @@ class Model(nn.Module):
         # Step5: 线性运算
         enc_out = self.linear2(enc_out)
         enc_out = F.sigmoid(enc_out)
-        enc_out - self.en_drop(enc_out)
+        enc_out = self.en_drop(enc_out)
         # [batch_size, n_heads, d_model]
         # enc_out = self.linearBlocks(enc_out)
         # [batch_size, n_heads, d_model]

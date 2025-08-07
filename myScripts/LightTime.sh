@@ -1,5 +1,5 @@
 #LightTime
-files=(51)
+files=(1)
 # 遍历文件列表
 for file in "${files[@]}"; do
   # 构造文件路径
@@ -12,8 +12,8 @@ for file in "${files[@]}"; do
 
   cmd="python -u run.py --is_training 1 --root_path ./dataset/processed --data_path ${data_path} --model_id ${model_id} --model LightTime\
     --task_name long_term_forecast --data custom --features MS --target Wspd --seq_len 432 --label_len 0 --pred_len 36 --enc_in 10 --dec_in 10 --c_out 1\
-    --d_model 120 --n_heads 16  --patch_len 108 --strid 54 --dropout 0 --train_epochs 40 --patience 5 --loss mse --use_gpu True --inverse --itr 1 --batch_size 64\
-    --learning_rate 0.001 --moving_avg 111 --noEx"
+    --d_model 120 --n_heads 16  --patch_len 108 --strid 54 --dropout 0 --train_epochs 40 --patience 5 --loss mae --use_gpu True --inverse --itr 1 --batch_size 64\
+    --learning_rate 0.001 --moving_avg 72 --noEx"
 
   # 定义日志文件路径
   log_file="logs/LongForecasting/LightTime/${model_id}.log"
