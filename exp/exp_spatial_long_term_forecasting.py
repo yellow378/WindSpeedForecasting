@@ -12,6 +12,7 @@ import warnings
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from tqdm.auto import tqdm
 
 warnings.filterwarnings("ignore")
 
@@ -61,7 +62,9 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
         total_loss = []
         self.model.eval()
         with torch.no_grad():
-            for i, batch in enumerate(vali_loader):
+            # 添加进度条
+            pbar = tqdm(vali_loader, desc='Validation', leave=False)
+            for i, batch in enumerate(pbar):
                 # 修复：使用GraphBatch格式
                 batch = batch.to(self.device)
                 batch_x = batch.x  # [batch_size, n_nodes, seq_len, n_features]
@@ -79,19 +82,16 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
                     outputs = self.model(graph_data)
 
                 # 处理输出维度
-                # outputs: [batch_size, n_nodes, pred_len, c_out] 或 [batch_size * n_nodes, pred_len]
                 if len(outputs.shape) == 2:
-                    # 如果是 [batch_size * n_nodes, pred_len]，重塑为 [batch_size, n_nodes, pred_len]
                     batch_size = batch_x.shape[0]
                     n_nodes = batch_x.shape[1]
                     outputs = outputs.reshape(batch_size, n_nodes, -1)
                 
-                # 确保输出维度匹配
                 if len(outputs.shape) == 4:
-                    outputs = outputs.squeeze(-1)  # 移除最后一维如果是1
+                    outputs = outputs.squeeze(-1)
                 
-                # 计算损失 - 只对目标变量计算（通常是第一个特征）
-                if self.args.features == 'MS':  # 多变量预测单变量
+                # 计算损失
+                if self.args.features == 'MS':
                     pred = outputs[:, :, :, 0] if len(outputs.shape) == 4 else outputs
                     true = batch_y[:, :, :, 0] if len(batch_y.shape) == 4 else batch_y
                 else:
@@ -103,6 +103,9 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
 
                 loss = criterion(pred, true)
                 total_loss.append(loss.item())
+                
+                # 更新进度条描述
+                pbar.set_postfix({'val_loss': f'{loss.item():.4f}'})
 
         total_loss = np.average(total_loss)
         self.model.train()
@@ -135,23 +138,22 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
             self.model.train()
             epoch_time = time.time()
             
-            for i, batch in enumerate(train_loader):
+            # 添加训练进度条
+            pbar = tqdm(enumerate(train_loader), total=len(train_loader), desc=f'Epoch {epoch+1}/{self.args.train_epochs}')
+            for i, batch in pbar:
                 iter_count += 1
                 model_optim.zero_grad()
                 
-                # 数据移动到设备
                 batch = batch.to(self.device)
                 batch_x = batch.x
                 batch_y = batch.y
                 edge_index = batch.edge_index
 
-                # encoder - decoder
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
                         graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index})()
                         outputs = self.model(graph_data)
 
-                        # 处理输出维度
                         if len(outputs.shape) == 2:
                             batch_size = batch_x.shape[0]
                             n_nodes = batch_x.shape[1]
@@ -160,7 +162,6 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
                         if len(outputs.shape) == 4:
                             outputs = outputs.squeeze(-1)
 
-                        # 计算损失
                         if self.args.features == 'MS':
                             pred = outputs[:, :, :, 0] if len(outputs.shape) == 4 else outputs
                             true = batch_y[:, :, :, 0] if len(batch_y.shape) == 4 else batch_y
@@ -174,7 +175,6 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
                     graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index})()
                     outputs = self.model(graph_data)
 
-                    # 处理输出维度
                     if len(outputs.shape) == 2:
                         batch_size = batch_x.shape[0]
                         n_nodes = batch_x.shape[1]
@@ -183,7 +183,6 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
                     if len(outputs.shape) == 4:
                         outputs = outputs.squeeze(-1)
 
-                    # 计算损失
                     if self.args.features == 'MS':
                         pred = outputs[:, :, :, 0] if len(outputs.shape) == 4 else outputs
                         true = batch_y[:, :, :, 0] if len(batch_y.shape) == 4 else batch_y
@@ -194,23 +193,11 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
                     loss = criterion(pred, true)
                     train_loss.append(loss.item())
 
-                if (i + 1) % 100 == 0:
-                    print(
-                        "\titers: {0}, epoch: {1} | loss: {2:.7f}".format(
-                            i + 1, epoch + 1, loss.item()
-                        )
-                    )
-                    speed = (time.time() - time_now) / iter_count
-                    left_time = speed * (
-                        (self.args.train_epochs - epoch) * train_steps - i
-                    )
-                    print(
-                        "\tspeed: {:.4f}s/iter; left time: {:.4f}s".format(
-                            speed, left_time
-                        )
-                    )
-                    iter_count = 0
-                    time_now = time.time()
+                # 更新进度条
+                pbar.set_postfix({
+                    'loss': f'{loss.item():.4f}',
+                    'lr': model_optim.param_groups[0]['lr']
+                })
 
                 if self.args.use_amp:
                     scaler.scale(loss).backward()
@@ -261,7 +248,9 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
 
         self.model.eval()
         with torch.no_grad():
-            for i, batch in enumerate(test_loader):
+            # 添加测试进度条
+            pbar = tqdm(test_loader, desc='Testing')
+            for batch in pbar:
                 batch = batch.to(self.device)
                 batch_x = batch.x
                 batch_y = batch.y
@@ -271,7 +260,6 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
                     torch.cuda.synchronize()
                 start_time = time.time()
 
-                # encoder - decoder
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
                         graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index})()
@@ -287,20 +275,16 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
                 total_latency += (end_time - start_time)
                 count += 1
 
-                # 处理输出维度
                 if len(outputs.shape) == 2:
                     batch_size = batch_x.shape[0]
                     n_nodes = batch_x.shape[1]
                     outputs = outputs.reshape(batch_size, n_nodes, -1)
                 
-                # 移动到CPU并转换为numpy
                 outputs = outputs.detach().cpu().numpy()
                 batch_y = batch_y.detach().cpu().numpy()
 
-                # 反标准化处理
                 if hasattr(test_data, 'inverse_transform') and self.args.inverse:
                     shape = outputs.shape
-                    # 对每个节点分别进行反标准化
                     node_names = list(test_data.processed_data.keys())
                     for node_idx, node_name in enumerate(node_names):
                         if node_idx < shape[1]:
@@ -323,6 +307,9 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
 
                 preds.append(outputs)
                 trues.append(batch_y)
+                
+                # 更新进度条
+                pbar.set_postfix({'batch': f'{count}/{len(test_loader)}'})
 
         avg_latency = total_latency / count
         print(f"\nInference Speed Summary:")
@@ -334,14 +321,12 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
         trues = np.concatenate(trues, axis=0)
         print("test shape:", preds.shape, trues.shape)
 
-        # 重塑为标准格式 [samples, nodes, time_steps]
         if len(preds.shape) == 4:
             preds = preds.reshape(-1, preds.shape[-2], preds.shape[-1])
             trues = trues.reshape(-1, trues.shape[-2], trues.shape[-1])
         
         print("reshaped test shape:", preds.shape, trues.shape)
 
-        # result save
         folder_path = "./results/" + setting + "/"
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
