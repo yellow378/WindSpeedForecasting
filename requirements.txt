@@ -1,12 +1,34 @@
-einops==0.4.0
-matplotlib==3.7.0
-numpy==1.23.5
-pandas==1.5.3
-patool==1.12
-reformer-pytorch==1.4.4
-scikit-learn==1.2.2
-scipy==1.10.1
-sktime==0.16.1
-sympy==1.11.1
-torch==1.7.1
-tqdm==4.64.1
+# PyTorch 生态
+# torch==2.8.0
+# torchvision==0.21.0
+# torchaudio==2.8.0
+
+# PyTorch Geometric 及其依赖
+torch-geometric
+# torch-scatter
+# torch-sparse
+# torch-cluster
+# torch-spline-conv
+
+# 科学计算核心包 (升级版本)
+numpy         # 从 1.23.5 升级，支持torch 2.8
+scipy      # 从 1.10.1 升级
+pandas        # 从 1.5.3 升级，大幅提升性能
+sympy    # 从 1.11.1 升级
+
+# 机器学习
+scikit-learn  # 从 1.2.2 升级，新增很多特性
+sktime        # 从 0.16.1 大幅升级，支持新numpy/pandas
+
+# 可视化和工具
+matplotlib     # 从 3.7.0 升级
+einops         # 从 0.4.0 升级，支持更多操作
+tqdm          # 从 4.64.1 升级
+
+# 实用工具
+patool          # 保持不变，这个包很稳定
+
+# 可选：GAT相关的额外工具
+networkx         # 图操作工具
+plotly        # 图可视化
+seaborn       # 增强可视化

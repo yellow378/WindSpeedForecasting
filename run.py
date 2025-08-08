@@ -6,6 +6,7 @@ from exp.exp_imputation import Exp_Imputation
 from exp.exp_short_term_forecasting import Exp_Short_Term_Forecast
 from exp.exp_anomaly_detection import Exp_Anomaly_Detection
 from exp.exp_classification import Exp_Classification
+from exp.exp_spatial_long_term_forecasting import Exp_Spatial_Long_Term_Forecast
 from utils.print_args import print_args
 import random
 import numpy as np
@@ -51,6 +52,7 @@ if __name__ == "__main__":
         help="root path of the data file",
     )
     parser.add_argument("--data_path", type=str, default="ETTh1.csv", help="data file")
+    parser.add_argument("--edge_file", type=str, default=None, help="edge file for GAT")
     parser.add_argument(
         "--features",
         type=str,
@@ -102,6 +104,7 @@ if __name__ == "__main__":
     parser.add_argument("--c_out", type=int, default=7, help="output size")
     parser.add_argument("--d_model", type=int, default=512, help="dimension of model")
     parser.add_argument("--n_heads", type=int, default=8, help="num of heads")
+    parser.add_argument("--heads", type=int, default=8, help="num of LightTime Heads")
     parser.add_argument("--e_layers", type=int, default=2, help="num of encoder layers")
     parser.add_argument("--d_layers", type=int, default=1, help="num of decoder layers")
     parser.add_argument("--d_ff", type=int, default=2048, help="dimension of fcn")
@@ -254,6 +257,8 @@ if __name__ == "__main__":
         Exp = Exp_Anomaly_Detection
     elif args.task_name == "classification":
         Exp = Exp_Classification
+    elif args.task_name == "spatial":
+        Exp = Exp_Spatial_Long_Term_Forecast
     else:
         Exp = Exp_Long_Term_Forecast
 

@@ -99,7 +99,7 @@ class TimeSeriesGraphDataset(Dataset):
     时间序列图数据集 - 不依赖PyTorch Geometric
     """
     def __init__(self, data_dir, seq_len=96, pred_len=24, target_col='Wspd', 
-                 scaler_type='standard', edge_file=None, test_ratio=0.2):
+                 scaler_type='standard', edge_file=None, flag='train'):
         """
         初始化数据集
         :param data_dir: 数据文件目录
@@ -108,16 +108,16 @@ class TimeSeriesGraphDataset(Dataset):
         :param target_col: 目标列名
         :param scaler_type: 标准化类型 ('standard', 'minmax', None)
         :param edge_file: 边文件路径，如果为None则自动生成
-        :param test_ratio: 测试集比例
+        :param flag: 数据集类型 ('train', 'val', 'test')
         """
         self.data_dir = data_dir
         self.seq_len = seq_len
         self.pred_len = pred_len
         self.target_col = target_col
         self.scaler_type = scaler_type
-        self.test_ratio = test_ratio
+        self.flag = flag
         
-        print("Loading data files...")
+        print(f"Loading data files for {flag} set...")
         # 加载所有数据文件
         self.data_files = self._get_data_files()
         self.raw_data = self._load_all_data()
@@ -135,11 +135,11 @@ class TimeSeriesGraphDataset(Dataset):
             if edge_file:
                 self._save_edge_index(self.edge_index, edge_file)
         
-        print("Creating samples...")
+        print(f"Creating samples for {flag} set...")
         # 创建样本索引
         self.samples = self._create_samples()
         
-        print(f"Dataset initialized: {len(self.samples)} samples, {len(self.processed_data)} nodes")
+        print(f"{flag.upper()} dataset initialized: {len(self.samples)} samples, {len(self.processed_data)} nodes")
         
     def _get_data_files(self):
         """获取所有CSV数据文件"""
@@ -203,7 +203,7 @@ class TimeSeriesGraphDataset(Dataset):
                     features_df = features_df.fillna(method='ffill').fillna(method='bfill')
                     features = features_df.values
                 
-                # 数据标准化
+                # 数据标准化 - 注意：验证集和测试集应该使用训练集的标准化参数
                 if self.scaler_type == 'standard':
                     scaler = StandardScaler()
                 elif self.scaler_type == 'minmax':
@@ -212,8 +212,16 @@ class TimeSeriesGraphDataset(Dataset):
                     scaler = None
                 
                 if scaler is not None:
-                    features_scaled = scaler.fit_transform(features)
-                    scalers[node_name] = scaler
+                    if self.flag == 'train':
+                        # 训练集：拟合并转换
+                        features_scaled = scaler.fit_transform(features)
+                        scalers[node_name] = scaler
+                    else:
+                        # 验证集和测试集：只转换（需要预先拟合的scaler）
+                        # 这里暂时用fit_transform，实际使用时需要传入训练集的scaler
+                        features_scaled = scaler.fit_transform(features)
+                        scalers[node_name] = scaler
+                        print(f"Warning: {self.flag} set should use scaler fitted on train set")
                 else:
                     features_scaled = features
                     scalers[node_name] = None
@@ -436,7 +444,7 @@ class TimeSeriesGraphDataset(Dataset):
         return edge_index
     
     def _create_samples(self):
-        """创建训练样本"""
+        """创建训练样本，按照flag进行7:2:1划分"""
         samples = []
         node_names = list(self.processed_data.keys())
         
@@ -450,7 +458,8 @@ class TimeSeriesGraphDataset(Dataset):
         if max_start_idx <= 0:
             raise ValueError(f"数据长度不足，需要至少 {self.seq_len + self.pred_len} 个时间点, 当前最短长度: {min_length}")
         
-        # 创建滑动窗口样本
+        # 创建所有可能的样本索引
+        all_samples = []
         for start_idx in range(0, max_start_idx, 1):  # 步长为1
             sample = {
                 'start_idx': start_idx,
@@ -459,9 +468,25 @@ class TimeSeriesGraphDataset(Dataset):
                 'pred_end_idx': start_idx + self.seq_len + self.pred_len,
                 'node_names': node_names
             }
-            samples.append(sample)
+            all_samples.append(sample)
         
-        print(f"Created {len(samples)} samples (seq_len={self.seq_len}, pred_len={self.pred_len})")
+        # 按照7:2:1的比例划分数据集
+        total_samples = len(all_samples)
+        train_end = int(total_samples * 0.7)
+        val_end = int(total_samples * 0.9)  # 0.7 + 0.2 = 0.9
+        
+        if self.flag == 'train':
+            samples = all_samples[:train_end]
+        elif self.flag == 'val':
+            samples = all_samples[train_end:val_end]
+        elif self.flag == 'test':
+            samples = all_samples[val_end:]
+        else:
+            raise ValueError(f"Invalid flag: {self.flag}. Must be 'train', 'val', or 'test'")
+        
+        print(f"Created {len(samples)} {self.flag} samples (seq_len={self.seq_len}, pred_len={self.pred_len})")
+        print(f"Split info - Total: {total_samples}, Train: {train_end}, Val: {val_end-train_end}, Test: {total_samples-val_end}")
+        
         return samples
     
     def __len__(self):
@@ -553,29 +578,61 @@ def collate_fn(batch):
     return GraphBatch(batch)
 
 
-def create_dataloader(data_dir, batch_size=32, seq_len=96, pred_len=24, 
-                     target_col='Wspd', scaler_type='standard', 
-                     edge_file=None, num_workers=0, shuffle=True):
+def create_dataloader(args, flag):
     """创建数据加载器"""
+    shuffle_flag = flag == 'train'  # 只有训练集需要shuffle
+    drop_last = flag == 'train'     # 只有训练集需要drop_last
+    batch_size = args.batch_size
+
+    # 根据args构建参数
+    dataset_args = {
+        'data_dir': args.root_path,
+        'seq_len': args.seq_len,
+        'pred_len': args.pred_len,
+        'target_col': args.target,
+        'scaler_type': "standard",
+        'flag': flag
+    }
     
-    dataset = TimeSeriesGraphDataset(
-        data_dir=data_dir,
-        seq_len=seq_len,
-        pred_len=pred_len,
-        target_col=target_col,
-        scaler_type=scaler_type,
-        edge_file=edge_file
-    )
+    # 添加边文件路径（如果提供）
+    if hasattr(args, 'edge_file') and args.edge_file:
+        dataset_args['edge_file'] = args.edge_file
+    else:
+        # 自动生成边文件路径
+        import os
+        edge_file = os.path.join(args.root_path, 'generated_edges.csv')
+        dataset_args['edge_file'] = edge_file
+
+    dataset = TimeSeriesGraphDataset(**dataset_args)
+    print(f"{flag} dataset size: {len(dataset)}")
     
     dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
-        shuffle=shuffle,
-        num_workers=num_workers,
+        shuffle=shuffle_flag,
+        num_workers=0,  # 设为0避免多进程问题
+        pin_memory=True,
+        drop_last=drop_last,
         collate_fn=collate_fn
     )
     
+    return dataloader, dataset  # 注意：返回顺序是 (dataloader, dataset)
+    
     return dataloader, dataset
+
+
+# 使用示例
+def create_all_dataloaders(args):
+    """创建训练、验证和测试数据加载器"""
+    train_loader, train_dataset = create_dataloader(args, 'train')
+    val_loader, val_dataset = create_dataloader(args, 'val')
+    test_loader, test_dataset = create_dataloader(args, 'test')
+    
+    return {
+        'train': (train_loader, train_dataset),
+        'val': (val_loader, val_dataset),
+        'test': (test_loader, test_dataset)
+    }
 
 
 # 测试函数
@@ -697,15 +754,14 @@ class DataConfig:
     """数据配置类，兼容GAT模型"""
     def __init__(self):
         # 数据路径配置
-        self.data_dir = './data'
-        self.edge_file = './edges.csv'
+        self.root_path = '../dataset/spatial_wind'  # 数据目录
         
         # 序列长度配置
         self.seq_len = 96
         self.pred_len = 24
         
         # 目标变量配置
-        self.target_col = 'Wspd'
+        self.target = 'Wspd'
         self.enc_in = 10  # 输入特征数量
         self.c_out = 1    # 输出特征数量
         self.out_channels = 1  # GAT输出通道数

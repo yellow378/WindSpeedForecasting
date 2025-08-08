@@ -1,4 +1,4 @@
-from data_provider.data_factory import data_provider
+from data_provider.gat_data_loader import *
 from exp.exp_basic import Exp_Basic
 from utils.tools import EarlyStopping, adjust_learning_rate, visual
 from utils.metrics import metric
@@ -19,8 +19,19 @@ warnings.filterwarnings("ignore")
 class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
     def __init__(self, args):
         super(Exp_Spatial_Long_Term_Forecast, self).__init__(args)
+        # 添加图相关属性
+        self.edge_index = None
+        self.n_nodes = None
 
     def _build_model(self):
+        # 确保模型参数正确设置
+        if not hasattr(self.args, 'n_nodes') or self.args.n_nodes is None:
+            # 临时加载数据来获取节点数
+            temp_data, _ = self._get_data(flag='train')
+            self.args.n_nodes = len(temp_data.processed_data)
+            self.args.enc_in = list(temp_data.processed_data.values())[0]['features'].shape[1]
+            print(f"Auto-detected: n_nodes={self.args.n_nodes}, enc_in={self.args.enc_in}")
+
         model = self.model_dict[self.args.model].Model(self.args).float()
 
         total_params = sum(p.numel() for p in model.parameters())
@@ -31,7 +42,7 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
         return model
 
     def _get_data(self, flag):
-        data_set, data_loader = data_provider(self.args, flag)
+        data_loader, data_set = create_dataloader(self.args, flag)
         return data_set, data_loader
 
     def _select_optimizer(self):
@@ -39,7 +50,10 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
         return model_optim
 
     def _select_criterion(self):
-        criterion = nn.L1Loss()
+        if hasattr(self.args, 'loss') and self.args.loss == 'MSE':
+            criterion = nn.MSELoss()
+        else:
+            criterion = nn.L1Loss()  # MAE Loss
         # criterion = SoftDTW(gamma=1.0, normalize=True)
         return criterion
 
@@ -47,59 +61,49 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
         total_loss = []
         self.model.eval()
         with torch.no_grad():
-            for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(
-                vali_loader
-            ):
-                batch_x = batch_x.float().to(self.device)
-                batch_y = batch_y.float()
+            for i, batch in enumerate(vali_loader):
+                # 修复：使用GraphBatch格式
+                batch = batch.to(self.device)
+                batch_x = batch.x  # [batch_size, n_nodes, seq_len, n_features]
+                batch_y = batch.y  # [batch_size, n_nodes, pred_len]
+                edge_index = batch.edge_index
 
-                batch_x_mark = batch_x_mark.float().to(self.device)
-                batch_y_mark = batch_y_mark.float().to(self.device)
-
-                # decoder input
-                dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len :, :]).float()
-                dec_inp = (
-                    torch.cat([batch_y[:, : self.args.label_len, :], dec_inp], dim=1)
-                    .float()
-                    .to(self.device)
-                )
-                # encoder - decoder
+                # GAT模型预测
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
-                        if self.args.output_attention:
-                            outputs = self.model(
-                                batch_x, batch_x_mark, dec_inp, batch_y_mark
-                            )[0]
-                        else:
-                            outputs = self.model(
-                                batch_x, batch_x_mark, dec_inp, batch_y_mark
-                            )
+                        # GAT模型接受GraphData格式
+                        graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index})()
+                        outputs = self.model(graph_data)
                 else:
-                    if any(
-                        substr in self.args.model
-                        for substr in {"SparseTSF", "SegRNN", "TST"}
-                    ):
-                        outputs = self.model(batch_x)
-                    else:
-                        if self.args.output_attention:
-                            outputs = self.model(
-                                batch_x, batch_x_mark, dec_inp, batch_y_mark
-                            )[0]
-                        else:
-                            outputs = self.model(
-                                batch_x, batch_x_mark, dec_inp, batch_y_mark
-                            )
-                f_dim = -1 if self.args.features == "MS" else 0
-                outputs = outputs[:, -self.args.pred_len :, f_dim:]
-                batch_y = batch_y[:, -self.args.pred_len :, f_dim:].to(self.device)
+                    graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index})()
+                    outputs = self.model(graph_data)
 
-                pred = outputs.detach().cpu()
-                true = batch_y.detach().cpu()
+                # 处理输出维度
+                # outputs: [batch_size, n_nodes, pred_len, c_out] 或 [batch_size * n_nodes, pred_len]
+                if len(outputs.shape) == 2:
+                    # 如果是 [batch_size * n_nodes, pred_len]，重塑为 [batch_size, n_nodes, pred_len]
+                    batch_size = batch_x.shape[0]
+                    n_nodes = batch_x.shape[1]
+                    outputs = outputs.reshape(batch_size, n_nodes, -1)
+                
+                # 确保输出维度匹配
+                if len(outputs.shape) == 4:
+                    outputs = outputs.squeeze(-1)  # 移除最后一维如果是1
+                
+                # 计算损失 - 只对目标变量计算（通常是第一个特征）
+                if self.args.features == 'MS':  # 多变量预测单变量
+                    pred = outputs[:, :, :, 0] if len(outputs.shape) == 4 else outputs
+                    true = batch_y[:, :, :, 0] if len(batch_y.shape) == 4 else batch_y
+                else:
+                    pred = outputs.squeeze() if len(outputs.shape) > 3 else outputs
+                    true = batch_y.squeeze() if len(batch_y.shape) > 3 else batch_y
 
-                # loss = criterion(pred.squeeze(-1), true.squeeze(-1))
-                loss = criterion(pred.squeeze(-1), true.squeeze(-1))
+                pred = pred.detach().cpu()
+                true = true.detach().cpu()
 
-                total_loss.append(loss)
+                loss = criterion(pred, true)
+                total_loss.append(loss.item())
+
         total_loss = np.average(total_loss)
         self.model.train()
         return total_loss
@@ -130,64 +134,64 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
 
             self.model.train()
             epoch_time = time.time()
-            for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(
-                train_loader
-            ):
+            
+            for i, batch in enumerate(train_loader):
                 iter_count += 1
                 model_optim.zero_grad()
-                batch_x = batch_x.float().to(self.device)
-
-                batch_y = batch_y.float().to(self.device)
-                batch_x_mark = batch_x_mark.float().to(self.device)
-                batch_y_mark = batch_y_mark.float().to(self.device)
-
-                # decoder input
-                dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len :, :]).float()
-                dec_inp = (
-                    torch.cat([batch_y[:, : self.args.label_len, :], dec_inp], dim=1)
-                    .float()
-                    .to(self.device)
-                )
+                
+                # 数据移动到设备
+                batch = batch.to(self.device)
+                batch_x = batch.x
+                batch_y = batch.y
+                edge_index = batch.edge_index
 
                 # encoder - decoder
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
-                        if self.args.output_attention:
-                            outputs = self.model(
-                                batch_x, batch_x_mark, dec_inp, batch_y_mark
-                            )[0]
-                        else:
-                            outputs = self.model(
-                                batch_x, batch_x_mark, dec_inp, batch_y_mark
-                            )
+                        graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index})()
+                        outputs = self.model(graph_data)
 
-                        f_dim = -1 if self.args.features == "MS" else 0
-                        outputs = outputs[:, -self.args.pred_len :, f_dim:]
-                        batch_y = batch_y[:, -self.args.pred_len :, f_dim:].to(
-                            self.device
-                        )
-                        loss = criterion(outputs, batch_y)
+                        # 处理输出维度
+                        if len(outputs.shape) == 2:
+                            batch_size = batch_x.shape[0]
+                            n_nodes = batch_x.shape[1]
+                            outputs = outputs.reshape(batch_size, n_nodes, -1)
+                        
+                        if len(outputs.shape) == 4:
+                            outputs = outputs.squeeze(-1)
+
+                        # 计算损失
+                        if self.args.features == 'MS':
+                            pred = outputs[:, :, :, 0] if len(outputs.shape) == 4 else outputs
+                            true = batch_y[:, :, :, 0] if len(batch_y.shape) == 4 else batch_y
+                        else:
+                            pred = outputs.squeeze() if len(outputs.shape) > 3 else outputs
+                            true = batch_y.squeeze() if len(batch_y.shape) > 3 else batch_y
+
+                        loss = criterion(pred, true)
                         train_loss.append(loss.item())
                 else:
-                    if any(
-                        substr in self.args.model
-                        for substr in {"SparseTSF", "SegRNN", "TST"}
-                    ):
-                        outputs = self.model(batch_x)
-                    else:
-                        if self.args.output_attention:
-                            outputs = self.model(
-                                batch_x, batch_x_mark, dec_inp, batch_y_mark
-                            )[0]
-                        else:
-                            outputs = self.model(
-                                batch_x, batch_x_mark, dec_inp, batch_y_mark
-                            )
+                    graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index})()
+                    outputs = self.model(graph_data)
 
-                    f_dim = -1 if self.args.features == "MS" else 0
-                    outputs = outputs[:, -self.args.pred_len :, f_dim:]
-                    batch_y = batch_y[:, -self.args.pred_len :, f_dim:].to(self.device)
-                    loss = criterion(outputs.squeeze(-1), batch_y.squeeze(-1))
+                    # 处理输出维度
+                    if len(outputs.shape) == 2:
+                        batch_size = batch_x.shape[0]
+                        n_nodes = batch_x.shape[1]
+                        outputs = outputs.reshape(batch_size, n_nodes, -1)
+                    
+                    if len(outputs.shape) == 4:
+                        outputs = outputs.squeeze(-1)
+
+                    # 计算损失
+                    if self.args.features == 'MS':
+                        pred = outputs[:, :, :, 0] if len(outputs.shape) == 4 else outputs
+                        true = batch_y[:, :, :, 0] if len(batch_y.shape) == 4 else batch_y
+                    else:
+                        pred = outputs.squeeze() if len(outputs.shape) > 3 else outputs
+                        true = batch_y.squeeze() if len(batch_y.shape) > 3 else batch_y
+
+                    loss = criterion(pred, true)
                     train_loss.append(loss.item())
 
                 if (i + 1) % 100 == 0:
@@ -246,167 +250,96 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
                 torch.load(os.path.join("./checkpoints/" + setting, "checkpoint.pth"))
             )
 
-        # weights = self.model.en_weights.data.cpu().numpy()
-        # np.save('en_weights.npy', weights)
-
-        # weights = self.model.de_weights.data.cpu().numpy()
-        # np.save('de_weights.npy', weights)
-
         preds = []
         trues = []
-        # ### save seasonal and trend
-        # seasonals = []
-        # trends = []
-        # xs = []
         total_latency = 0.0
         count = 0
 
-        folder_path = "./test_results/" + setting + "/"
+        folder_path = "./spatial_test_results/" + setting + "/"
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
 
         self.model.eval()
         with torch.no_grad():
-            for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(
-                test_loader
-            ):
-                batch_x = batch_x.float().to(self.device)
-                batch_y = batch_y.float().to(self.device)
+            for i, batch in enumerate(test_loader):
+                batch = batch.to(self.device)
+                batch_x = batch.x
+                batch_y = batch.y
+                edge_index = batch.edge_index
 
-                batch_x_mark = batch_x_mark.float().to(self.device)
-                batch_y_mark = batch_y_mark.float().to(self.device)
-
-                # decoder input
-                dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len :, :]).float()
-                dec_inp = (
-                    torch.cat([batch_y[:, : self.args.label_len, :], dec_inp], dim=1)
-                    .float()
-                    .to(self.device)
-                )
                 if self.device.type == 'cuda':
                     torch.cuda.synchronize()
                 start_time = time.time()
+
                 # encoder - decoder
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
-                        if self.args.output_attention:
-                            outputs = self.model(
-                                batch_x, batch_x_mark, dec_inp, batch_y_mark
-                            )[0]
-                        else:
-                            outputs = self.model(
-                                batch_x, batch_x_mark, dec_inp, batch_y_mark
-                            )
+                        graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index})()
+                        outputs = self.model(graph_data)
                 else:
-                    if any(
-                        substr in self.args.model
-                        for substr in {"SparseTSF", "SegRNN", "TST"}
-                    ):
-                        outputs = self.model(batch_x)
-                    else:
-                        if self.args.output_attention:
-                            outputs = self.model(
-                                batch_x, batch_x_mark, dec_inp, batch_y_mark
-                            )[0]
+                    graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index})()
+                    outputs = self.model(graph_data)
 
-                        else:
-                            outputs = self.model(
-                                batch_x, batch_x_mark, dec_inp, batch_y_mark
-                            )
                 if self.device.type == 'cuda':
                     torch.cuda.synchronize()
                 end_time = time.time()
                 
-                # 新增：累计延迟
                 total_latency += (end_time - start_time)
                 count += 1
 
-                f_dim = -1 if self.args.features == "MS" else 0
-                outputs = outputs[:, -self.args.pred_len :, :]
-                batch_y = batch_y[:, -self.args.pred_len :, :].to(self.device)
+                # 处理输出维度
+                if len(outputs.shape) == 2:
+                    batch_size = batch_x.shape[0]
+                    n_nodes = batch_x.shape[1]
+                    outputs = outputs.reshape(batch_size, n_nodes, -1)
+                
+                # 移动到CPU并转换为numpy
                 outputs = outputs.detach().cpu().numpy()
                 batch_y = batch_y.detach().cpu().numpy()
-                if test_data.scale and self.args.inverse:
-                    shape = batch_y.shape
-                    if outputs.shape[-1] != batch_y.shape[-1]:
-                        outputs = np.tile(
-                            outputs, [1, 1, int(batch_y.shape[-1] / outputs.shape[-1])]
-                        )
-                    outputs = test_data.inverse_transform(
-                        outputs.reshape(shape[0] * shape[1], -1)
-                    ).reshape(shape)
-                    batch_y = test_data.inverse_transform(
-                        batch_y.reshape(shape[0] * shape[1], -1)
-                    ).reshape(shape)
 
-                # if test_data.scale and self.args.inverse:
-                #    shape = outputs.shape
-                #    expanded_outputs = np.zeros(
-                #        (outputs.shape[0], outputs.shape[1], self.args.enc_in)
-                #    )
-                #    expanded_outputs[:, :, -1] = outputs[:, :, -1]
-                #    expanded_outputs[:, :, 0:-1] = batch_y[:, :, 0:-1]
-                #    outputs = expanded_outputs
-                #    # outputs = test_data.inverse_transform(outputs.squeeze(0))[:,-1:].reshape(shape)
-                #    # batch_y = test_data.inverse_transform(batch_y.squeeze(0))[:,-1:].reshape(shape)
-                #    # print(outputs.shape)
-                #    outputs = test_data.inverse_transform(
-                #        outputs.reshape(shape[0] * shape[1], shape[2])
-                #    )[:, -1:].reshape(shape)
-                #    batch_y = test_data.inverse_transform(
-                #        batch_y.reshape(shape[0] * shape[1], self.args.enc_in)
-                #    )[:, -1:].reshape(shape)
+                # 反标准化处理
+                if hasattr(test_data, 'inverse_transform') and self.args.inverse:
+                    shape = outputs.shape
+                    # 对每个节点分别进行反标准化
+                    node_names = list(test_data.processed_data.keys())
+                    for node_idx, node_name in enumerate(node_names):
+                        if node_idx < shape[1]:
+                            for batch_idx in range(shape[0]):
+                                outputs[batch_idx, node_idx, :] = test_data.inverse_transform(
+                                    outputs[batch_idx, node_idx, :], 
+                                    node_name, 
+                                    target_col_only=True
+                                )
+                                batch_y[batch_idx, node_idx, :] = test_data.inverse_transform(
+                                    batch_y[batch_idx, node_idx, :], 
+                                    node_name, 
+                                    target_col_only=True
+                                )
 
-                outputs = outputs[:, :, f_dim:]
-                batch_y = batch_y[:, :, f_dim:]
+                f_dim = 0 if self.args.features == "MS" else slice(None)
+                if isinstance(f_dim, int):
+                    outputs = outputs[:, :, :, f_dim] if len(outputs.shape) == 4 else outputs
+                    batch_y = batch_y[:, :, :, f_dim] if len(batch_y.shape) == 4 else batch_y
 
-                # ### trend
-                # x = batch_x.detach().cpu().numpy()
-                # seasonal, trend = self.model.decompsition(x)
-                # seasonal = seasonal.detach().cpu().numpy()
-                # trend = trend.detach().cpu().numpy()
-                # xs.append(x)
-                # seasonals.append(seasonal)
-                # trends.append(trend)
-                # ### end
+                preds.append(outputs)
+                trues.append(batch_y)
 
-                pred = outputs
-                true = batch_y
-
-                preds.append(pred)
-                trues.append(true)
-                # if i % 20 == 0:
-                #     input = batch_x.detach().cpu().numpy()
-                #     if test_data.scale and self.args.inverse:
-                #         shape = input.shape
-                #         input = test_data.inverse_transform(input.squeeze(0)).reshape(shape)
-                #     gt = np.concatenate((input[0, :, -1], true[0, :, -1]), axis=0)
-                #     pd = np.concatenate((input[0, :, -1], pred[0, :, -1]), axis=0)
-                #     visual(gt, pd, os.path.join(folder_path, str(i) + '.pdf'))
         avg_latency = total_latency / count
         print(f"\nInference Speed Summary:")
         print(f"- Total batches: {count}")
         print(f"- Average latency per batch: {avg_latency:.4f} seconds")
         print(f"- Throughput: {len(test_loader.dataset)/total_latency:.2f} samples/s")
 
-
-
-        preds = np.array(preds)
-        trues = np.array(trues)
-        print("test shape:", preds.shape, trues.shape)
-        preds = preds.reshape(-1, preds.shape[-2], preds.shape[-1])
-        trues = trues.reshape(-1, trues.shape[-2], trues.shape[-1])
+        preds = np.concatenate(preds, axis=0)
+        trues = np.concatenate(trues, axis=0)
         print("test shape:", preds.shape, trues.shape)
 
-        # ###seasonal
-        # seasonals = np.array(seasonals)
-        # trends = np.array(trends)
-        # xs = np.array(xs)
-        # print('seasonal shape:', seasonals.shape, trends.shape, xs.shape)
-        # seasonals = seasonals.reshape(-1, seasonals.shape[-2], seasonals.shape[-1])
-        # trends = trends.reshape(-1, trends.shape[-2], trends.shape[-1])
-        # xs = xs.reshape(-1, xs.shape[-2], xs.shape[-1])
-        # ###end
+        # 重塑为标准格式 [samples, nodes, time_steps]
+        if len(preds.shape) == 4:
+            preds = preds.reshape(-1, preds.shape[-2], preds.shape[-1])
+            trues = trues.reshape(-1, trues.shape[-2], trues.shape[-1])
+        
+        print("reshaped test shape:", preds.shape, trues.shape)
 
         # result save
         folder_path = "./results/" + setting + "/"
@@ -414,70 +347,18 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
             os.makedirs(folder_path)
 
         mae, mse, rmse, mape, mspe, r2 = metric(preds, trues)
-        print("mse:{}, mae:{}".format(mse, mae))
-        f = open("result_long_term_forecast.txt", "a")
+        print("mse:{}, mae:{}, rmse:{}, mape:{}, mspe:{}, r2:{}".format(
+            mse, mae, rmse, mape, mspe, r2))
+        
+        f = open("result_spatial_long_term_forecast.txt", "a")
         f.write(setting + "  \n")
-        f.write("mse:{}, mae:{}".format(mse, mae))
+        f.write("mse:{}, mae:{}, rmse:{}, mape:{}, mspe:{}, r2:{}".format(
+            mse, mae, rmse, mape, mspe, r2))
         f.write("\n")
         f.write("\n")
         f.close()
 
-        np.save(folder_path + "metrics.npy", np.array([mae, mse, rmse, mape, mspe,r2]))
+        np.save(folder_path + "metrics.npy", np.array([mae, mse, rmse, mape, mspe, r2]))
         np.save(folder_path + "pred.npy", preds)
         np.save(folder_path + "true.npy", trues)
-        # ### seasonal
-        # np.save(folder_path + 'seasonal.npy', seasonals)
-        # np.save(folder_path + 'trend.npy', trends)
-        # np.save(folder_path + 'x.npy', xs)
-        # ### end
-
-        trues = trues[::36, :, :]
-        trues = trues.reshape(-1)
-
-        preds = preds[::36, :, :]
-        preds = preds.reshape(-1)
-
-        # 创建一个图形和坐标轴对象
-        fig, ax = plt.subplots(figsize=(20, 8))
-
-        # 绘制trues序列，颜色为蓝色
-        ax.plot(trues, color="red", label="trues")
-
-        # 绘制preds序列，颜色为绿色
-        ax.plot(preds, color="blue", label="preds")
-
-        # 添加图例
-        ax.legend()
-
-        # 设置坐标轴标签等
-        ax.set_xlabel("Time Point")
-        ax.set_ylabel("Wind Speed")
-        ax.set_title("Wind Speed Forecasting")
-        plt.savefig(folder_path + "forecasting.png", bbox_inches="tight")
-
-        true = trues[2880:5000]
-        pred = preds[2880:5000]
-        # pred = preds[2880:4320]
-
-        # 创建一个图形和坐标轴对象
-        fig, ax = plt.subplots(figsize=(20, 8))
-
-        # 绘制trues序列，颜色为蓝色
-        ax.plot(true, color="red", label="trues")
-
-        # 绘制preds序列，颜色为绿色
-        ax.plot(pred, color="blue", label="preds")
-
-        # 添加每隔36个点的竖线（虚线）
-        for i in range(0, len(true), 36):
-            ax.axvline(x=i, color="gray", linestyle="dashed")
-
-        # 添加图例
-        ax.legend()
-
-        # 设置坐标轴标签等
-        ax.set_xlabel("Time Point")
-        ax.set_ylabel("Wind Speed")
-        ax.set_title("Wind Speed Forecasting")
-        plt.savefig(folder_path + "forecasting_local.png", bbox_inches="tight")
         return

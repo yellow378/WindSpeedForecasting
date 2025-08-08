@@ -26,7 +26,7 @@ class Model(nn.Module):
 
         self.dropout = configs.dropout
         self.d_ff = configs.d_ff
-        self.n_heads = configs.n_heads
+        self.n_heads = configs.heads
 
         self.noEx = configs.noEx
 

@@ -1,0 +1,35 @@
+#!/bin/bash
+
+python run.py \
+  --task_name spatial \
+  --is_training 1 \
+  --root_path ./dataset/spatial_wind \
+  --data_path spatial_wind \
+  --model_id spatial_wind_GAT \
+  --model GAT \
+  --data spatial_wind \
+  --features MS \
+  --target Wspd \
+  --freq 10min \
+  --seq_len 432 \
+  --pred_len 36 \
+  --enc_in 10 \
+  --dec_in 1 \
+  --c_out 1 \
+  --d_model 512 \
+  --n_heads 8 \
+  --heads 8 \
+  --e_layers 2 \
+  --d_layers 1 \
+  --d_ff 2048 \
+  --dropout 0.1 \
+  --batch_size 1 \
+  --learning_rate 0.0001 \
+  --train_epochs 50 \
+  --patience 10 \
+  --des Exp \
+  --loss MAE \
+  --lradj type1 \
+  --use_gpu True \
+  --gpu 0 \
+  --edge_file ./dataset/spatial_wind/edges.csv
