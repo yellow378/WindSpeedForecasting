@@ -57,51 +57,34 @@ class GAT(torch.nn.Module):
         :param device: 设备
         """
         x, edge_index = data.x, data.edge_index
-        batch_size, n_nodes, seq_len, enc_in = x.shape
-        
-        # 重塑输入以适应LightTime编码器
+        batch_size_nnodes, seq_len, enc_in = x.shape
         # [batch_size*n_nodes, seq_len, enc_in]
-        x_reshaped = x.reshape(batch_size * n_nodes, seq_len, enc_in)
         
         # Step 1: 使用LightTime的时间编码器处理每个节点
-        temporal_features = self.encode_temporal_features(x_reshaped)
+        temporal_features = self.encode_temporal_features(x)
         # [batch_size*n_nodes, n_heads * d_model]
-        
-        # Step 2: 为GAT准备批处理 - 修复这里的边索引计算
-        batch_edge_index = self.create_batch_edge_index_fixed(
-            edge_index, batch_size, n_nodes, device or x.device
-        )
+
         
         # Step 3: GAT空间建模
-        spatial_features = self.gat(temporal_features, batch_edge_index)
+        spatial_features = self.gat(temporal_features, edge_index)
         spatial_features = self.gat_norm(spatial_features)
         spatial_features = self.gat_dropout(spatial_features)
         
         # Step 4: 重新整形
         # [batch_size, n_nodes, in_channels]
-        spatial_features = spatial_features.reshape(batch_size, n_nodes, self.in_channels)
+        spatial_features = spatial_features.reshape(batch_size_nnodes, self.in_channels)
         
         # Step 5: 空间特征到时间预测的转换
-        # 方式1: 节点级别的预测（每个节点独立预测）
-        node_predictions = []
-        for node_idx in range(n_nodes):
-            node_feature = spatial_features[:, node_idx, :]  # [batch_size, in_channels]
-            
-            # 投影到decoder输入维度
-            decoder_input = self.spatial_projection(node_feature)  # [batch_size, n_heads * d_model]
-            decoder_input = decoder_input.reshape(batch_size, self.lightTime.n_heads, self.lightTime.d_model)
-            
-            # 使用LightTime的解码器
-            node_pred = self.lightTime.decoder(decoder_input)  # [batch_size, pred_len, c_out]
-            node_predictions.append(node_pred)
+        # 投影到decoder输入维度
+        decoder_input = self.spatial_projection(spatial_features)  # [batch_size, n_heads * d_model]
+        decoder_input = decoder_input.reshape(batch_size_nnodes, self.lightTime.n_heads, self.lightTime.d_model)
         
-        # 合并所有节点的预测
-        # [batch_size, n_nodes, pred_len, c_out] -> [batch_size, n_nodes, pred_len]
-        prediction = torch.stack(node_predictions, dim=1)
-        if prediction.shape[-1] == 1:
-            prediction = prediction.squeeze(-1)  # [batch_size, n_nodes, pred_len]
-        
-        return prediction
+        # 使用LightTime的解码器
+        node_pred = self.lightTime.decoder(decoder_input)  # [batch_size*n_nodes, pred_len, c_out]
+        if node_pred.shape[-1] == 1:
+            node_pred = node_pred.squeeze(-1)  # [batch_size*n_nodes, pred_len]
+
+        return node_pred
 
     def encode_temporal_features(self, x):
         """

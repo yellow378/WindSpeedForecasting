@@ -89,13 +89,7 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
                         outputs = self.model(graph_data)
 
                     # 处理输出维度
-                    if len(outputs.shape) == 2:
-                        batch_size = batch_x.shape[0]
-                        n_nodes = batch_x.shape[1]
-                        outputs = outputs.reshape(batch_size, n_nodes, -1)
-                    
-                    if len(outputs.shape) == 4:
-                        outputs = outputs.squeeze(-1)
+                    outputs = outputs.reshape(self.args.batch_size, -1, self.args.pred_len, 1)
                     
                     # 计算损失
                     if self.args.features == 'MS':
@@ -184,48 +178,25 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
                         print(f"  n_nodes from x: {batch_x.shape[1]}")
 
                     if self.args.use_amp:
-                        with torch.cuda.amp.autocast():
+                        with torch.amp.autocast():
                             graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index})()
                             outputs = self.model(graph_data)
-
-                            if len(outputs.shape) == 2:
-                                batch_size = batch_x.shape[0]
-                                n_nodes = batch_x.shape[1]
-                                outputs = outputs.reshape(batch_size, n_nodes, -1)
-                            
-                            if len(outputs.shape) == 4:
-                                outputs = outputs.squeeze(-1)
-
-                            if self.args.features == 'MS':
-                                pred = outputs[:, :, :, 0] if len(outputs.shape) == 4 else outputs
-                                true = batch_y[:, :, :, 0] if len(batch_y.shape) == 4 else batch_y
-                            else:
-                                pred = outputs.squeeze() if len(outputs.shape) > 3 else outputs
-                                true = batch_y.squeeze() if len(batch_y.shape) > 3 else batch_y
-
-                            loss = criterion(pred, true)
-                            train_loss.append(loss.item())
                     else:
                         graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index})()
                         outputs = self.model(graph_data)
 
-                        if len(outputs.shape) == 2:
-                            batch_size = batch_x.shape[0]
-                            n_nodes = batch_x.shape[1]
-                            outputs = outputs.reshape(batch_size, n_nodes, -1)
-                        
-                        if len(outputs.shape) == 4:
-                            outputs = outputs.squeeze(-1)
+                    # 处理输出维度
+                    outputs = outputs.reshape(self.args.batch_size, -1, self.args.pred_len, 1)
+                    
+                    if self.args.features == 'MS':
+                        pred = outputs[:, :, :, 0] if len(outputs.shape) == 4 else outputs
+                        true = batch_y[:, :, :, 0] if len(batch_y.shape) == 4 else batch_y
+                    else:
+                        pred = outputs.squeeze() if len(outputs.shape) > 3 else outputs
+                        true = batch_y.squeeze() if len(batch_y.shape) > 3 else batch_y
 
-                        if self.args.features == 'MS':
-                            pred = outputs[:, :, :, 0] if len(outputs.shape) == 4 else outputs
-                            true = batch_y[:, :, :, 0] if len(batch_y.shape) == 4 else batch_y
-                        else:
-                            pred = outputs.squeeze() if len(outputs.shape) > 3 else outputs
-                            true = batch_y.squeeze() if len(batch_y.shape) > 3 else batch_y
-
-                        loss = criterion(pred, true)
-                        train_loss.append(loss.item())
+                    loss = criterion(pred, true)
+                    train_loss.append(loss.item())
 
                     # 更新进度条
                     pbar.set_postfix({
@@ -303,13 +274,15 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
                     start_time = time.time()
 
                     if self.args.use_amp:
-                        with torch.cuda.amp.autocast():
+                        with torch.amp.autocast():
                             graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index})()
                             outputs = self.model(graph_data)
                     else:
                         graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index})()
                         outputs = self.model(graph_data)
-
+                    # 处理输出维度
+                    outputs = outputs.reshape(self.args.batch_size, -1, self.args.pred_len, 1)
+                    
                     if self.device.type == 'cuda':
                         torch.cuda.synchronize()
                     end_time = time.time()
