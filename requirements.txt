@@ -33,3 +33,4 @@ networkx         # 图操作工具
 plotly        # 图可视化
 seaborn       # 增强可视化
 numba
+statsmodels 

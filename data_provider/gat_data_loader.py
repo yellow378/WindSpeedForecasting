@@ -10,6 +10,15 @@ from sklearn.metrics.pairwise import pairwise_distances
 import warnings
 warnings.filterwarnings('ignore')
 
+# 尝试导入PyTorch Geometric，如果失败则使用自定义类
+try:
+    from torch_geometric.data import Data, Batch
+    USE_TORCH_GEOMETRIC = True
+    print("Using PyTorch Geometric")
+except ImportError:
+    USE_TORCH_GEOMETRIC = False
+    print("PyTorch Geometric not available, using custom classes")
+
 
 class GraphData:
     """
@@ -37,7 +46,7 @@ class GraphData:
 
 class GraphBatch:
     """
-    简单的图批处理类，替代PyTorch Geometric的Batch
+    修复版本：简单的图批处理类，替代PyTorch Geometric的Batch
     """
     def __init__(self, batch_data):
         """
@@ -63,23 +72,31 @@ class GraphBatch:
         else:
             self.y = None
         
-        # 合并edge_index (假设所有图具有相同的结构)
+        # 修复：边索引处理 - 不要在这里进行批处理偏移
+        # 每个batch中的所有图都有相同的结构，只保存单个图的边索引
         if batch_data[0].edge_index is not None:
-            # 为每个批次创建独立的边索引
-            batch_edge_indices = []
-            for i, data in enumerate(batch_data):
-                # 添加节点偏移
-                offset_edges = data.edge_index + i * self.n_nodes
-                batch_edge_indices.append(offset_edges)
+            # 只保存原始的边索引，不进行批处理偏移
+            # 模型会在forward中处理批处理偏移
+            self.edge_index = batch_data[0].edge_index.clone()
             
-            self.edge_index = torch.cat(batch_edge_indices, dim=1)
+            # 验证边索引的有效性
+            if self.edge_index.max() >= self.n_nodes:
+                print(f"Warning: Invalid edge_index in batch. Max index: {self.edge_index.max()}, n_nodes: {self.n_nodes}")
+                # 过滤无效边
+                valid_mask = (self.edge_index[0] < self.n_nodes) & (self.edge_index[1] < self.n_nodes)
+                self.edge_index = self.edge_index[:, valid_mask]
+                print(f"Filtered edges: {self.edge_index.shape[1]} edges remaining")
             
-            # 创建batch标识符
+            # 创建batch标识符（用于某些可能需要的场景）
             self.batch = torch.cat([torch.full((self.n_nodes,), i, dtype=torch.long) 
                                    for i in range(self.batch_size)])
         else:
             self.edge_index = None
             self.batch = None
+        
+        print(f"GraphBatch created: batch_size={self.batch_size}, n_nodes={self.n_nodes}, "
+              f"x_shape={self.x.shape if self.x is not None else None}, "
+              f"edge_shape={self.edge_index.shape if self.edge_index is not None else None}")
     
     def to(self, device):
         """将数据移动到指定设备"""
@@ -96,10 +113,10 @@ class GraphBatch:
 
 class TimeSeriesGraphDataset(Dataset):
     """
-    时间序列图数据集 - 不依赖PyTorch Geometric
+    时间序列图数据集 - 支持PyTorch Geometric或自定义类
     """
     def __init__(self, data_dir, seq_len=96, pred_len=24, target_col='Wspd', 
-                 scaler_type='standard', edge_file=None, flag='train'):
+                 scaler_type='standard', edge_file=None, flag='train', shared_scalers=None):
         """
         初始化数据集
         :param data_dir: 数据文件目录
@@ -109,6 +126,7 @@ class TimeSeriesGraphDataset(Dataset):
         :param scaler_type: 标准化类型 ('standard', 'minmax', None)
         :param edge_file: 边文件路径，如果为None则自动生成
         :param flag: 数据集类型 ('train', 'val', 'test')
+        :param shared_scalers: 共享的scaler（用于val/test集）
         """
         self.data_dir = data_dir
         self.seq_len = seq_len
@@ -116,6 +134,7 @@ class TimeSeriesGraphDataset(Dataset):
         self.target_col = target_col
         self.scaler_type = scaler_type
         self.flag = flag
+        self.shared_scalers = shared_scalers  # 修复：接收共享的scalers
         
         print(f"Loading data files for {flag} set...")
         # 加载所有数据文件
@@ -141,6 +160,26 @@ class TimeSeriesGraphDataset(Dataset):
         
         print(f"{flag.upper()} dataset initialized: {len(self.samples)} samples, {len(self.processed_data)} nodes")
         
+        # 验证数据集的完整性
+        self._validate_dataset()
+        
+    def _validate_dataset(self):
+        """验证数据集的完整性"""
+        n_nodes = len(self.processed_data)
+        
+        # 验证边索引
+        if self.edge_index is not None and self.edge_index.numel() > 0:
+            max_edge_idx = self.edge_index.max().item()
+            if max_edge_idx >= n_nodes:
+                print(f"ERROR: edge_index contains invalid node indices!")
+                print(f"Max edge index: {max_edge_idx}, n_nodes: {n_nodes}")
+                # 修复：过滤无效边
+                valid_mask = (self.edge_index[0] < n_nodes) & (self.edge_index[1] < n_nodes)
+                self.edge_index = self.edge_index[:, valid_mask]
+                print(f"Fixed: Filtered to {self.edge_index.shape[1]} valid edges")
+        
+        print(f"Dataset validation passed: {n_nodes} nodes, {self.edge_index.shape[1] if self.edge_index is not None else 0} edges")
+    
     def _get_data_files(self):
         """获取所有CSV数据文件"""
         files = []
@@ -148,7 +187,7 @@ class TimeSeriesGraphDataset(Dataset):
             if file.endswith('.csv'):
                 files.append(os.path.join(self.data_dir, file))
         files = sorted(files)
-        #print(f"Found {len(files)} data files")
+        print(f"Found {len(files)} data files")
         return files
     
     def _load_all_data(self):
@@ -176,7 +215,7 @@ class TimeSeriesGraphDataset(Dataset):
         return all_data
     
     def _preprocess_data(self):
-        """预处理数据：标准化、对齐时间等"""
+        """修复：预处理数据，正确处理scaler共享"""
         processed_data = {}
         scalers = {}
         
@@ -203,7 +242,7 @@ class TimeSeriesGraphDataset(Dataset):
                     features_df = features_df.fillna(method='ffill').fillna(method='bfill')
                     features = features_df.values
                 
-                # 数据标准化 - 注意：验证集和测试集应该使用训练集的标准化参数
+                # 修复：数据标准化 - 正确处理scaler共享
                 if self.scaler_type == 'standard':
                     scaler = StandardScaler()
                 elif self.scaler_type == 'minmax':
@@ -212,16 +251,24 @@ class TimeSeriesGraphDataset(Dataset):
                     scaler = None
                 
                 if scaler is not None:
-                    if self.flag == 'train':
+                    if self.flag == 'train' or self.shared_scalers is None:
                         # 训练集：拟合并转换
                         features_scaled = scaler.fit_transform(features)
                         scalers[node_name] = scaler
                     else:
-                        # 验证集和测试集：只转换（需要预先拟合的scaler）
-                        # 这里暂时用fit_transform，实际使用时需要传入训练集的scaler
-                        features_scaled = scaler.fit_transform(features)
-                        scalers[node_name] = scaler
-                        print(f"Warning: {self.flag} set should use scaler fitted on train set")
+                        # 验证集和测试集：使用训练集的scaler
+                        if node_name in self.shared_scalers:
+                            shared_scaler = self.shared_scalers[node_name]
+                            if shared_scaler is not None:
+                                features_scaled = shared_scaler.transform(features)
+                                scalers[node_name] = shared_scaler
+                            else:
+                                features_scaled = features
+                                scalers[node_name] = None
+                        else:
+                            print(f"Warning: No shared scaler found for {node_name}, fitting new one")
+                            features_scaled = scaler.fit_transform(features)
+                            scalers[node_name] = scaler
                 else:
                     features_scaled = features
                     scalers[node_name] = None
@@ -233,7 +280,7 @@ class TimeSeriesGraphDataset(Dataset):
                     'dates': df_filtered['date'].values if 'date' in df_filtered.columns else None
                 }
                 
-                print(f"Processed {node_name}: {features_scaled.shape}")
+                #print(f"Processed {node_name}: {features_scaled.shape}")
                 
             except Exception as e:
                 print(f"Error preprocessing {node_name}: {e}")
@@ -267,7 +314,7 @@ class TimeSeriesGraphDataset(Dataset):
         return min_start, max_end
     
     def _generate_edges(self):
-        """生成图的边，基于多种相似性度量"""
+        """修复：生成图的边，确保索引有效性"""
         print("Generating graph edges based on correlation and similarity...")
         
         node_names = list(self.processed_data.keys())
@@ -279,22 +326,32 @@ class TimeSeriesGraphDataset(Dataset):
         
         # 提取目标变量的时间序列用于相似性计算
         target_series = []
-        for node_name in node_names:
+        valid_nodes = []  # 跟踪有效节点
+        
+        for i, node_name in enumerate(node_names):
             data = self.processed_data[node_name]
             if self.target_col in data['columns']:
                 target_idx = data['columns'].index(self.target_col)
-                target_series.append(data['features'][:, target_idx])
+                series = data['features'][:, target_idx]
+                target_series.append(series)
+                valid_nodes.append(i)
             else:
                 # 如果没有目标列，使用第一列
                 print(f"Warning: {self.target_col} not found in {node_name}, using first column")
-                target_series.append(data['features'][:, 0])
+                series = data['features'][:, 0]
+                target_series.append(series)
+                valid_nodes.append(i)
         
         # 确保所有序列长度一致
-        min_length = min(len(series) for series in target_series)
-        target_series = [series[:min_length] for series in target_series]
-        target_series = np.array(target_series)  # [n_nodes, time_steps]
+        if target_series:
+            min_length = min(len(series) for series in target_series)
+            target_series = [series[:min_length] for series in target_series]
+            target_series = np.array(target_series)  # [n_valid_nodes, time_steps]
+        else:
+            print("Error: No valid target series found")
+            return torch.tensor([[], []], dtype=torch.long)
         
-        print(f"Computing similarities for {n_nodes} nodes with {min_length} time steps")
+        print(f"Computing similarities for {len(valid_nodes)} valid nodes with {min_length} time steps")
         
         # 计算多种相似性度量
         similarity_matrices = {}
@@ -312,7 +369,17 @@ class TimeSeriesGraphDataset(Dataset):
         similarity_matrices['euclidean'] = self._compute_euclidean_similarity(target_series)
         
         # 组合多种相似性度量
-        edge_index = self._combine_similarities(similarity_matrices, node_names)
+        edge_index = self._combine_similarities(similarity_matrices, valid_nodes, n_nodes)
+        
+        # 修复：最终验证生成的边索引
+        if edge_index.numel() > 0:
+            max_idx = edge_index.max().item()
+            if max_idx >= n_nodes:
+                print(f"ERROR in edge generation: max index {max_idx} >= n_nodes {n_nodes}")
+                # 过滤无效边
+                valid_mask = (edge_index[0] < n_nodes) & (edge_index[1] < n_nodes)
+                edge_index = edge_index[:, valid_mask]
+                print(f"Filtered to {edge_index.shape[1]} valid edges")
         
         return edge_index
     
@@ -376,9 +443,9 @@ class TimeSeriesGraphDataset(Dataset):
             n_nodes = series.shape[0]
             return np.eye(n_nodes)
     
-    def _combine_similarities(self, similarity_matrices, node_names, threshold=0.3, top_k=3):
-        """组合多种相似性度量生成边"""
-        n_nodes = len(node_names)
+    def _combine_similarities(self, similarity_matrices, valid_nodes, total_nodes, threshold=0.3, top_k=3):
+        """修复：组合多种相似性度量生成边，确保索引映射正确"""
+        n_valid = len(valid_nodes)
         
         # 权重组合不同的相似性度量
         weights = {
@@ -389,7 +456,7 @@ class TimeSeriesGraphDataset(Dataset):
         }
         
         # 计算加权平均相似性
-        combined_similarity = np.zeros((n_nodes, n_nodes))
+        combined_similarity = np.zeros((n_valid, n_valid))
         for metric, weight in weights.items():
             if metric in similarity_matrices:
                 combined_similarity += weight * similarity_matrices[metric]
@@ -398,7 +465,7 @@ class TimeSeriesGraphDataset(Dataset):
         edges = set()
         
         # 方法1: Top-K连接
-        for i in range(n_nodes):
+        for i in range(n_valid):
             similarities = combined_similarity[i].copy()
             similarities[i] = -1  # 排除自连接
             
@@ -407,40 +474,62 @@ class TimeSeriesGraphDataset(Dataset):
                 top_indices = np.argsort(similarities)[-top_k:]
                 for j in top_indices:
                     if similarities[j] > threshold:
-                        edges.add((i, j))
-                        edges.add((j, i))  # 无向图
+                        # 映射回原始节点索引
+                        orig_i = valid_nodes[i]
+                        orig_j = valid_nodes[j]
+                        edges.add((orig_i, orig_j))
+                        edges.add((orig_j, orig_i))  # 无向图
         
         # 方法2: 如果边太少，降低阈值
-        if len(edges) < n_nodes:
+        if len(edges) < n_valid:
             print(f"Too few edges ({len(edges)}), lowering threshold")
             lower_threshold = threshold * 0.5
-            for i in range(n_nodes):
-                for j in range(n_nodes):
+            for i in range(n_valid):
+                for j in range(n_valid):
                     if i != j and combined_similarity[i, j] > lower_threshold:
-                        edges.add((i, j))
-                        edges.add((j, i))
+                        orig_i = valid_nodes[i]
+                        orig_j = valid_nodes[j]
+                        edges.add((orig_i, orig_j))
+                        edges.add((orig_j, orig_i))
         
         # 方法3: 如果还是没有足够的边，创建基于距离的连接
-        if len(edges) < n_nodes:
+        if len(edges) < n_valid:
             print("Creating distance-based connections")
-            for i in range(n_nodes):
+            for i in range(n_valid):
                 # 至少连接到一个最相似的节点
                 similarities = combined_similarity[i].copy()
                 similarities[i] = -1
                 if np.max(similarities) > 0:
                     best_j = np.argmax(similarities)
-                    edges.add((i, best_j))
-                    edges.add((best_j, i))
+                    orig_i = valid_nodes[i]
+                    orig_j = valid_nodes[best_j]
+                    edges.add((orig_i, orig_j))
+                    edges.add((orig_j, orig_i))
         
-        # 转换为tensor
+        # 转换为tensor并验证
         if len(edges) == 0:
             # 创建自环作为最后的备选
-            edges = [(i, i) for i in range(n_nodes)]
+            edges = [(i, i) for i in valid_nodes]
         
         edges_list = list(edges)
-        edge_index = torch.tensor(edges_list, dtype=torch.long).t().contiguous()
+        if edges_list:
+            edge_index = torch.tensor(edges_list, dtype=torch.long).t().contiguous()
+        else:
+            edge_index = torch.tensor([[], []], dtype=torch.long)
         
-        print(f"Generated {edge_index.shape[1]} edges for {n_nodes} nodes")
+        # 修复：最终验证 - 确保所有边索引都在有效范围内
+        if edge_index.numel() > 0:
+            max_idx = edge_index.max().item()
+            if max_idx >= total_nodes:
+                print(f"ERROR: Generated edge_index contains invalid indices!")
+                print(f"Max index: {max_idx}, total_nodes: {total_nodes}")
+                # 强制过滤
+                valid_mask = (edge_index[0] < total_nodes) & (edge_index[1] < total_nodes)
+                edge_index = edge_index[:, valid_mask]
+        
+        print(f"Generated {edge_index.shape[1] if edge_index.numel() > 0 else 0} edges for {total_nodes} nodes")
+        if edge_index.numel() > 0:
+            print(f"Edge index range: [{edge_index.min().item()}, {edge_index.max().item()}]")
         return edge_index
     
     def _create_samples(self):
@@ -520,17 +609,28 @@ class TimeSeriesGraphDataset(Dataset):
         x = torch.FloatTensor(np.array(node_features))  # [n_nodes, seq_len, n_features]
         y = torch.FloatTensor(np.array(target_values))   # [n_nodes, pred_len]
         
-        # 创建图数据对象
-        graph_data = GraphData(
-            x=x,
-            edge_index=self.edge_index,
-            y=y
-        )
+        # 创建图数据对象 - 根据可用库选择
+        if USE_TORCH_GEOMETRIC:
+            graph_data = Data(
+                x=x,
+                edge_index=self.edge_index,
+                y=y
+            )
+        else:
+            graph_data = GraphData(
+                x=x,
+                edge_index=self.edge_index,
+                y=y
+            )
         
         return graph_data
     
     def _save_edge_index(self, edge_index, file_path):
         """保存边索引到文件"""
+        if edge_index.numel() == 0:
+            print("No edges to save!")
+            return
+            
         edges_df = pd.DataFrame({
             'source': edge_index[0].numpy(),
             'target': edge_index[1].numpy()
@@ -540,10 +640,36 @@ class TimeSeriesGraphDataset(Dataset):
     
     def _load_edge_index(self, file_path):
         """从文件加载边索引"""
-        edges_df = pd.read_csv(file_path)
-        edge_index = torch.tensor([edges_df['source'].values, edges_df['target'].values], dtype=torch.long)
-        print(f"Loaded {edge_index.shape[1]} edges from {file_path}")
-        return edge_index
+        try:
+            edges_df = pd.read_csv(file_path)
+            if len(edges_df) == 0:
+                print("Empty edge file, creating minimal edges")
+                n_nodes = len(self.processed_data)
+                return torch.tensor([[i for i in range(n_nodes)], 
+                                   [i for i in range(n_nodes)]], dtype=torch.long)
+                
+            edge_index = torch.tensor([edges_df['source'].values, edges_df['target'].values], dtype=torch.long)
+            print(f"Loaded {edge_index.shape[1]} edges from {file_path}")
+            
+            # 验证加载的边索引
+            n_nodes = len(self.processed_data)
+            if edge_index.numel() > 0:
+                max_idx = edge_index.max().item()
+                if max_idx >= n_nodes:
+                    print(f"Warning: Loaded edge_index contains invalid indices!")
+                    print(f"Max index: {max_idx}, n_nodes: {n_nodes}")
+                    # 过滤无效边
+                    valid_mask = (edge_index[0] < n_nodes) & (edge_index[1] < n_nodes)
+                    edge_index = edge_index[:, valid_mask]
+                    print(f"Filtered to {edge_index.shape[1]} valid edges")
+            
+            return edge_index
+        except Exception as e:
+            print(f"Error loading edge file {file_path}: {e}")
+            # 创建默认边索引
+            n_nodes = len(self.processed_data)
+            return torch.tensor([[i for i in range(n_nodes)], 
+                               [i for i in range(n_nodes)]], dtype=torch.long)
     
     def get_scaler(self, node_name):
         """获取特定节点的标准化器"""
@@ -575,11 +701,14 @@ class TimeSeriesGraphDataset(Dataset):
 
 def collate_fn(batch):
     """自定义批处理函数"""
-    return GraphBatch(batch)
+    if USE_TORCH_GEOMETRIC:
+        return Batch.from_data_list(batch)
+    else:
+        return GraphBatch(batch)
 
 
 def create_dataloader(args, flag):
-    """创建数据加载器"""
+    """修复：创建数据加载器，正确处理scaler共享"""
     shuffle_flag = flag == 'train'  # 只有训练集需要shuffle
     drop_last = flag == 'train'     # 只有训练集需要drop_last
     batch_size = args.batch_size
@@ -599,12 +728,21 @@ def create_dataloader(args, flag):
         dataset_args['edge_file'] = args.edge_file
     else:
         # 自动生成边文件路径
-        import os
         edge_file = os.path.join(args.root_path, 'generated_edges.csv')
         dataset_args['edge_file'] = edge_file
 
+    # 修复：处理scaler共享
+    shared_scalers = None
+    if flag in ['val', 'test'] and hasattr(args, 'train_scalers'):
+        shared_scalers = args.train_scalers
+        dataset_args['shared_scalers'] = shared_scalers
+    
     dataset = TimeSeriesGraphDataset(**dataset_args)
     print(f"{flag} dataset size: {len(dataset)}")
+    
+    # 如果是训练集，保存scalers供后续使用
+    if flag == 'train':
+        args.train_scalers = dataset.scalers
     
     dataloader = DataLoader(
         dataset,
@@ -616,15 +754,16 @@ def create_dataloader(args, flag):
         collate_fn=collate_fn
     )
     
-    return dataloader, dataset  # 注意：返回顺序是 (dataloader, dataset)
-    
     return dataloader, dataset
 
 
 # 使用示例
 def create_all_dataloaders(args):
-    """创建训练、验证和测试数据加载器"""
+    """修复：创建训练、验证和测试数据加载器，确保scaler正确共享"""
+    # 首先创建训练集
     train_loader, train_dataset = create_dataloader(args, 'train')
+    
+    # 然后创建验证集和测试集（会使用训练集的scaler）
     val_loader, val_dataset = create_dataloader(args, 'val')
     test_loader, test_dataset = create_dataloader(args, 'test')
     
@@ -701,38 +840,72 @@ def test_dataloader():
     # 测试数据加载器
     print("\n=== Testing DataLoader ===")
     try:
-        dataloader, dataset = create_dataloader(
-            data_dir=data_dir,
-            batch_size=4,
-            seq_len=96,
-            pred_len=24,
-            target_col='Wspd',
-            scaler_type='standard',
-            edge_file='generated_edges.csv',
-            shuffle=True
-        )
+        # 创建配置对象
+        class TestArgs:
+            def __init__(self):
+                self.root_path = data_dir
+                self.batch_size = 4
+                self.seq_len = 96
+                self.pred_len = 24
+                self.target = 'Wspd'
+                self.edge_file = os.path.join(data_dir, 'generated_edges.csv')
         
-        print(f"Dataset size: {len(dataset)}")
-        print(f"Number of nodes: {len(dataset.processed_data)}")
-        print(f"Number of edges: {dataset.edge_index.shape[1]}")
+        args = TestArgs()
+        
+        # 测试修复后的dataloader创建
+        dataloaders = create_all_dataloaders(args)
+        
+        train_loader, train_dataset = dataloaders['train']
+        val_loader, val_dataset = dataloaders['val']
+        test_loader, test_dataset = dataloaders['test']
+        
+        print(f"Train dataset size: {len(train_dataset)}")
+        print(f"Val dataset size: {len(val_dataset)}")
+        print(f"Test dataset size: {len(test_dataset)}")
+        print(f"Number of nodes: {len(train_dataset.processed_data)}")
+        print(f"Number of edges: {train_dataset.edge_index.shape[1] if train_dataset.edge_index.numel() > 0 else 0}")
         
         # 测试几个批次
-        for i, batch in enumerate(dataloader):
-            print(f"\nBatch {i}:")
+        print("\n=== Testing Train Loader ===")
+        for i, batch in enumerate(train_loader):
+            print(f"Batch {i}:")
             print(f"  Input shape (x): {batch.x.shape}")
             print(f"  Target shape (y): {batch.y.shape}")
-            print(f"  Edge index shape: {batch.edge_index.shape}")
-            print(f"  Batch tensor shape: {batch.batch.shape if batch.batch is not None else 'None'}")
+            print(f"  Edge index shape: {batch.edge_index.shape if batch.edge_index is not None else 'None'}")
             
-            if i >= 2:  # 只看前3个批次
+            if hasattr(batch, 'batch') and batch.batch is not None:
+                print(f"  Batch tensor shape: {batch.batch.shape}")
+            
+            if i >= 1:  # 只看前2个批次
+                break
+        
+        # 测试验证集（检查scaler是否正确共享）
+        print("\n=== Testing Val Loader (Scaler Sharing) ===")
+        for i, batch in enumerate(val_loader):
+            print(f"Val Batch {i}:")
+            print(f"  Input shape (x): {batch.x.shape}")
+            print(f"  Target shape (y): {batch.y.shape}")
+            
+            # 验证scaler共享
+            node_names = list(train_dataset.processed_data.keys())
+            if node_names:
+                train_scaler = train_dataset.get_scaler(node_names[0])
+                val_scaler = val_dataset.get_scaler(node_names[0])
+                print(f"  Scaler sharing check: {train_scaler is val_scaler}")
+            
+            if i >= 0:  # 只看1个批次
                 break
         
         # 测试反标准化
         print("\n=== Testing Inverse Transform ===")
-        node_names = list(dataset.processed_data.keys())
+        node_names = list(train_dataset.processed_data.keys())
         if len(node_names) > 0:
-            sample_data = batch.y[0, 0, :].numpy()  # 第一个样本，第一个节点
-            original_data = dataset.inverse_transform(
+            # 从训练集获取一个样本
+            for batch in train_loader:
+                sample_data = batch.y[0, 0, :].numpy()  # 第一个样本，第一个节点
+                break
+                
+            original_data = train_dataset.inverse_transform(
                 sample_data, 
                 node_names[0], 
                 target_col_only=True
@@ -741,7 +914,7 @@ def test_dataloader():
             print(f"Original data range: [{original_data.min():.3f}, {original_data.max():.3f}]")
         
         print("\n=== Test Completed Successfully! ===")
-        return dataloader, dataset
+        return dataloaders
         
     except Exception as e:
         print(f"Error during testing: {e}")
@@ -792,6 +965,9 @@ class DataConfig:
         self.stride = 8
         self.patch_len = 16
         self.task_name = 'long_term_forecast'
+        
+        # 修复：添加scaler存储
+        self.train_scalers = None
 
 
 # 高级边生成器（独立版本）
@@ -926,53 +1102,43 @@ class AdvancedEdgeGenerator:
         return edges
     
     def _mutual_info_analysis(self, target_series, node_names):
-        """互信息分析（并行加速版）"""
+        """互信息分析"""
         try:
             from sklearn.feature_selection import mutual_info_regression
-            from tqdm.notebook import tqdm  # Jupyter专用进度条
-            from joblib import Parallel, delayed
-            import numpy as np
-
+            
             edges = {}
-            valid_pairs = []
-
-            # 预筛选有效节点对（减少重复计算）
+            
             for i, node1 in enumerate(node_names):
                 if node1 not in target_series:
                     continue
+                    
                 for j, node2 in enumerate(node_names):
-                    if node2 in target_series and i != j and j > i:  # 避免重复计算 (i,j)和(j,i)
-                        valid_pairs.append((i, j, node1, node2))
-
-            # 并行计算函数
-            def _calculate_mi(i, j, node1, node2):
-                try:
-                    series1 = target_series[node1]
-                    series2 = target_series[node2]
-                    min_len = min(len(series1), len(series2))
+                    if node2 not in target_series or i == j:
+                        continue
                     
-                    if min_len < 10:
-                        return None
-                    
-                    X = series1[:min_len].reshape(-1, 1)
-                    y = series2[:min_len]
-                    mi = mutual_info_regression(X, y, random_state=42)[0]
-                    return (i, j, mi) if mi > 0.1 else None  # 阈值过滤
-                except:
-                    return None
-
-            # 并行计算（n_jobs=-1使用所有CPU核心）
-            results = Parallel(n_jobs=-1)(
-                delayed(_calculate_mi)(i, j, node1, node2)
-                for i, j, node1, node2 in tqdm(valid_pairs, desc="Calculating MI")
-            )
-
-            # 收集结果
-            edges = { (i,j): mi for i, j, mi in results if mi is not None }
+                    try:
+                        series1 = target_series[node1]
+                        series2 = target_series[node2]
+                        min_len = min(len(series1), len(series2))
+                        
+                        if min_len < 10:
+                            continue
+                        
+                        X = series1[:min_len].reshape(-1, 1)
+                        y = series2[:min_len]
+                        
+                        mi = mutual_info_regression(X, y, random_state=42)[0]
+                        if mi > 0.1:  # 阈值过滤
+                            edges[(i, j)] = mi
+                            
+                    except Exception as e:
+                        continue
+            
             print(f"Mutual info analysis: found {len(edges)} significant connections")
             return edges
-        except ImportError as e:
-            print(f"Required package not found: {e}")
+            
+        except ImportError:
+            print("sklearn not available for mutual info analysis")
             return {}
     
     def _granger_analysis(self, target_series, node_names):
@@ -1097,7 +1263,6 @@ class AdvancedEdgeGenerator:
             print("No valid edges to save!")
     
     def _visualize_graph(self, edges, node_names):
-        print("可视化图结构...")
         """可视化图结构"""
         try:
             import matplotlib.pyplot as plt
@@ -1158,7 +1323,6 @@ class AdvancedEdgeGenerator:
             print("matplotlib or networkx not available for visualization")
         except Exception as e:
             print(f"Error creating visualization: {e}")
-
 def main():
     """主函数 - 完整的使用流程"""
     
@@ -1238,7 +1402,5 @@ def main():
         traceback.print_exc()
         return None, None, None
 
-
 if __name__ == "__main__":
-    # 运行完整流程
     main()

@@ -53,7 +53,7 @@ class GAT(torch.nn.Module):
         前向传播
         :param data: 包含x和edge_index的数据对象
                     x: [batch_size, n_nodes, seq_len, enc_in]
-                    edge_index: [2, num_edges]
+                    edge_index: [2, num_edges] - 单个图的边索引
         :param device: 设备
         """
         x, edge_index = data.x, data.edge_index
@@ -67,9 +67,8 @@ class GAT(torch.nn.Module):
         temporal_features = self.encode_temporal_features(x_reshaped)
         # [batch_size*n_nodes, n_heads * d_model]
         
-        # Step 2: 为GAT准备批处理
-        # 创建批处理边索引
-        batch_edge_index = self.create_batch_edge_index(
+        # Step 2: 为GAT准备批处理 - 修复这里的边索引计算
+        batch_edge_index = self.create_batch_edge_index_fixed(
             edge_index, batch_size, n_nodes, device or x.device
         )
         
@@ -125,14 +124,51 @@ class GAT(torch.nn.Module):
         
         return temporal_features
 
-    def create_batch_edge_index(self, edge_index, batch_size, n_nodes, device):
+    def create_batch_edge_index_fixed(self, edge_index, batch_size, n_nodes, device):
         """
-        为批处理创建边索引
+        修复版本：为批处理创建边索引
         :param edge_index: [2, num_edges] 单个图的边索引
         :param batch_size: 批处理大小
-        :param n_nodes: 节点数量
+        :param n_nodes: 单个图中的节点数量
         :param device: 设备
         :return: 批处理的边索引
+        """
+        # 验证原始边索引的有效性
+        if edge_index.max() >= n_nodes:
+            print(f"Warning: edge_index contains invalid node indices. Max index: {edge_index.max()}, n_nodes: {n_nodes}")
+            # 过滤无效的边
+            valid_mask = (edge_index[0] < n_nodes) & (edge_index[1] < n_nodes)
+            edge_index = edge_index[:, valid_mask]
+            print(f"Filtered edge_index shape: {edge_index.shape}")
+        
+        if edge_index.shape[1] == 0:
+            print("Warning: No valid edges found, creating self-loops")
+            # 创建自环
+            self_loops = torch.arange(n_nodes, device=device)
+            edge_index = torch.stack([self_loops, self_loops], dim=0)
+        
+        batch_edge_indices = []
+        
+        for i in range(batch_size):
+            # 为每个批次添加节点偏移
+            offset_edge_index = edge_index + i * n_nodes
+            batch_edge_indices.append(offset_edge_index)
+        
+        # 合并所有批次的边索引
+        batch_edge_index = torch.cat(batch_edge_indices, dim=1)
+        
+        # 验证批处理边索引的有效性
+        total_nodes = batch_size * n_nodes
+        if batch_edge_index.max() >= total_nodes:
+            print(f"Error: batch_edge_index max ({batch_edge_index.max()}) >= total_nodes ({total_nodes})")
+            raise ValueError(f"Invalid batch edge index: max={batch_edge_index.max()}, total_nodes={total_nodes}")
+        
+        print(f"Created batch edge index: shape={batch_edge_index.shape}, max_idx={batch_edge_index.max()}, total_nodes={total_nodes}")
+        return batch_edge_index.to(device)
+
+    def create_batch_edge_index(self, edge_index, batch_size, n_nodes, device):
+        """
+        原始版本（保留作为备用）
         """
         batch_edge_indices = []
         

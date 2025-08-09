@@ -2,7 +2,6 @@ from data_provider.gat_data_loader import *
 from exp.exp_basic import Exp_Basic
 from utils.tools import EarlyStopping, adjust_learning_rate, visual
 from utils.metrics import metric
-from utils.soft_dtw import SoftDTW
 import torch
 import torch.nn as nn
 from torch import optim
@@ -55,7 +54,6 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
             criterion = nn.MSELoss()
         else:
             criterion = nn.L1Loss()  # MAE Loss
-        # criterion = SoftDTW(gamma=1.0, normalize=True)
         return criterion
 
     def vali(self, vali_data, vali_loader, criterion):
@@ -65,47 +63,61 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
             # 添加进度条
             pbar = tqdm(vali_loader, desc='Validation', leave=False)
             for i, batch in enumerate(pbar):
-                # 修复：使用GraphBatch格式
-                batch = batch.to(self.device)
-                batch_x = batch.x  # [batch_size, n_nodes, seq_len, n_features]
-                batch_y = batch.y  # [batch_size, n_nodes, pred_len]
-                edge_index = batch.edge_index
+                try:
+                    # 修复：使用GraphBatch格式
+                    batch = batch.to(self.device)
+                    batch_x = batch.x  # [batch_size, n_nodes, seq_len, n_features]
+                    batch_y = batch.y  # [batch_size, n_nodes, pred_len]
+                    edge_index = batch.edge_index  # [2, num_edges] - 单个图的边索引
+                    
+                    # 调试输出
+                    if i == 0:
+                        print(f"\nValidation batch info:")
+                        print(f"  batch_x shape: {batch_x.shape}")
+                        print(f"  batch_y shape: {batch_y.shape}")
+                        print(f"  edge_index shape: {edge_index.shape}")
+                        print(f"  edge_index range: [{edge_index.min()}, {edge_index.max()}]")
 
-                # GAT模型预测
-                if self.args.use_amp:
-                    with torch.cuda.amp.autocast():
-                        # GAT模型接受GraphData格式
+                    # GAT模型预测
+                    if self.args.use_amp:
+                        with torch.cuda.amp.autocast():
+                            # GAT模型接受GraphData格式
+                            graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index})()
+                            outputs = self.model(graph_data)
+                    else:
                         graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index})()
                         outputs = self.model(graph_data)
-                else:
-                    graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index})()
-                    outputs = self.model(graph_data)
 
-                # 处理输出维度
-                if len(outputs.shape) == 2:
-                    batch_size = batch_x.shape[0]
-                    n_nodes = batch_x.shape[1]
-                    outputs = outputs.reshape(batch_size, n_nodes, -1)
-                
-                if len(outputs.shape) == 4:
-                    outputs = outputs.squeeze(-1)
-                
-                # 计算损失
-                if self.args.features == 'MS':
-                    pred = outputs[:, :, :, 0] if len(outputs.shape) == 4 else outputs
-                    true = batch_y[:, :, :, 0] if len(batch_y.shape) == 4 else batch_y
-                else:
-                    pred = outputs.squeeze() if len(outputs.shape) > 3 else outputs
-                    true = batch_y.squeeze() if len(batch_y.shape) > 3 else batch_y
+                    # 处理输出维度
+                    if len(outputs.shape) == 2:
+                        batch_size = batch_x.shape[0]
+                        n_nodes = batch_x.shape[1]
+                        outputs = outputs.reshape(batch_size, n_nodes, -1)
+                    
+                    if len(outputs.shape) == 4:
+                        outputs = outputs.squeeze(-1)
+                    
+                    # 计算损失
+                    if self.args.features == 'MS':
+                        pred = outputs[:, :, :, 0] if len(outputs.shape) == 4 else outputs
+                        true = batch_y[:, :, :, 0] if len(batch_y.shape) == 4 else batch_y
+                    else:
+                        pred = outputs.squeeze() if len(outputs.shape) > 3 else outputs
+                        true = batch_y.squeeze() if len(batch_y.shape) > 3 else batch_y
 
-                pred = pred.detach().cpu()
-                true = true.detach().cpu()
+                    pred = pred.detach().cpu()
+                    true = true.detach().cpu()
 
-                loss = criterion(pred, true)
-                total_loss.append(loss.item())
-                
-                # 更新进度条描述
-                pbar.set_postfix({'val_loss': f'{loss.item():.4f}'})
+                    loss = criterion(pred, true)
+                    total_loss.append(loss.item())
+                    
+                    # 更新进度条描述
+                    pbar.set_postfix({'val_loss': f'{loss.item():.4f}'})
+                    
+                except Exception as e:
+                    print(f"Error in validation batch {i}: {e}")
+                    print(f"Batch shapes: x={batch.x.shape}, edge_index={batch.edge_index.shape}")
+                    raise e
 
         total_loss = np.average(total_loss)
         self.model.train()
@@ -131,6 +143,16 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
         if self.args.use_amp:
             scaler = torch.cuda.amp.GradScaler()
 
+        # 打印训练信息
+        print(f"\n=== Training Setup ===")
+        print(f"Model: {self.args.model}")
+        print(f"Dataset: {len(train_data)} nodes, {len(train_loader)} batches")
+        print(f"Batch size: {self.args.batch_size}")
+        print(f"Sequence length: {self.args.seq_len}")
+        print(f"Prediction length: {self.args.pred_len}")
+        print(f"Learning rate: {self.args.learning_rate}")
+        print(f"Training epochs: {self.args.train_epochs}")
+
         for epoch in range(self.args.train_epochs):
             iter_count = 0
             train_loss = []
@@ -139,18 +161,51 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
             epoch_time = time.time()
             
             # 添加训练进度条
-            pbar = tqdm(enumerate(train_loader), total=len(train_loader), desc=f'Epoch {epoch+1}/{self.args.train_epochs}')
+            pbar = tqdm(enumerate(train_loader), total=len(train_loader), 
+                       desc=f'Epoch {epoch+1}/{self.args.train_epochs}')
+            
             for i, batch in pbar:
-                iter_count += 1
-                model_optim.zero_grad()
-                
-                batch = batch.to(self.device)
-                batch_x = batch.x
-                batch_y = batch.y
-                edge_index = batch.edge_index
+                try:
+                    iter_count += 1
+                    model_optim.zero_grad()
+                    
+                    batch = batch.to(self.device)
+                    batch_x = batch.x      # [batch_size, n_nodes, seq_len, n_features]
+                    batch_y = batch.y      # [batch_size, n_nodes, pred_len]
+                    edge_index = batch.edge_index  # [2, num_edges] - 原始边索引
+                    
+                    # 调试输出（仅第一个batch）
+                    if epoch == 0 and i == 0:
+                        print(f"\nFirst training batch info:")
+                        print(f"  batch_x shape: {batch_x.shape}")
+                        print(f"  batch_y shape: {batch_y.shape}")
+                        print(f"  edge_index shape: {edge_index.shape}")
+                        print(f"  edge_index range: [{edge_index.min()}, {edge_index.max()}]")
+                        print(f"  n_nodes from x: {batch_x.shape[1]}")
 
-                if self.args.use_amp:
-                    with torch.cuda.amp.autocast():
+                    if self.args.use_amp:
+                        with torch.cuda.amp.autocast():
+                            graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index})()
+                            outputs = self.model(graph_data)
+
+                            if len(outputs.shape) == 2:
+                                batch_size = batch_x.shape[0]
+                                n_nodes = batch_x.shape[1]
+                                outputs = outputs.reshape(batch_size, n_nodes, -1)
+                            
+                            if len(outputs.shape) == 4:
+                                outputs = outputs.squeeze(-1)
+
+                            if self.args.features == 'MS':
+                                pred = outputs[:, :, :, 0] if len(outputs.shape) == 4 else outputs
+                                true = batch_y[:, :, :, 0] if len(batch_y.shape) == 4 else batch_y
+                            else:
+                                pred = outputs.squeeze() if len(outputs.shape) > 3 else outputs
+                                true = batch_y.squeeze() if len(batch_y.shape) > 3 else batch_y
+
+                            loss = criterion(pred, true)
+                            train_loss.append(loss.item())
+                    else:
                         graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index})()
                         outputs = self.model(graph_data)
 
@@ -171,41 +226,27 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
 
                         loss = criterion(pred, true)
                         train_loss.append(loss.item())
-                else:
-                    graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index})()
-                    outputs = self.model(graph_data)
 
-                    if len(outputs.shape) == 2:
-                        batch_size = batch_x.shape[0]
-                        n_nodes = batch_x.shape[1]
-                        outputs = outputs.reshape(batch_size, n_nodes, -1)
-                    
-                    if len(outputs.shape) == 4:
-                        outputs = outputs.squeeze(-1)
+                    # 更新进度条
+                    pbar.set_postfix({
+                        'loss': f'{loss.item():.4f}',
+                        'lr': model_optim.param_groups[0]['lr']
+                    })
 
-                    if self.args.features == 'MS':
-                        pred = outputs[:, :, :, 0] if len(outputs.shape) == 4 else outputs
-                        true = batch_y[:, :, :, 0] if len(batch_y.shape) == 4 else batch_y
+                    if self.args.use_amp:
+                        scaler.scale(loss).backward()
+                        scaler.step(model_optim)
+                        scaler.update()
                     else:
-                        pred = outputs.squeeze() if len(outputs.shape) > 3 else outputs
-                        true = batch_y.squeeze() if len(batch_y.shape) > 3 else batch_y
-
-                    loss = criterion(pred, true)
-                    train_loss.append(loss.item())
-
-                # 更新进度条
-                pbar.set_postfix({
-                    'loss': f'{loss.item():.4f}',
-                    'lr': model_optim.param_groups[0]['lr']
-                })
-
-                if self.args.use_amp:
-                    scaler.scale(loss).backward()
-                    scaler.step(model_optim)
-                    scaler.update()
-                else:
-                    loss.backward()
-                    model_optim.step()
+                        loss.backward()
+                        model_optim.step()
+                        
+                except Exception as e:
+                    print(f"\nError in training batch {i}:")
+                    print(f"  Error: {e}")
+                    print(f"  Batch shapes: x={batch.x.shape}, edge_index={batch.edge_index.shape}")
+                    print(f"  Edge index stats: min={batch.edge_index.min()}, max={batch.edge_index.max()}")
+                    raise e
 
             print("Epoch: {} cost time: {}".format(epoch + 1, time.time() - epoch_time))
             train_loss = np.average(train_loss)
@@ -251,71 +292,77 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
             # 添加测试进度条
             pbar = tqdm(test_loader, desc='Testing')
             for batch in pbar:
-                batch = batch.to(self.device)
-                batch_x = batch.x
-                batch_y = batch.y
-                edge_index = batch.edge_index
+                try:
+                    batch = batch.to(self.device)
+                    batch_x = batch.x
+                    batch_y = batch.y
+                    edge_index = batch.edge_index
 
-                if self.device.type == 'cuda':
-                    torch.cuda.synchronize()
-                start_time = time.time()
+                    if self.device.type == 'cuda':
+                        torch.cuda.synchronize()
+                    start_time = time.time()
 
-                if self.args.use_amp:
-                    with torch.cuda.amp.autocast():
+                    if self.args.use_amp:
+                        with torch.cuda.amp.autocast():
+                            graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index})()
+                            outputs = self.model(graph_data)
+                    else:
                         graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index})()
                         outputs = self.model(graph_data)
-                else:
-                    graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index})()
-                    outputs = self.model(graph_data)
 
-                if self.device.type == 'cuda':
-                    torch.cuda.synchronize()
-                end_time = time.time()
-                
-                total_latency += (end_time - start_time)
-                count += 1
+                    if self.device.type == 'cuda':
+                        torch.cuda.synchronize()
+                    end_time = time.time()
+                    
+                    total_latency += (end_time - start_time)
+                    count += 1
 
-                if len(outputs.shape) == 2:
-                    batch_size = batch_x.shape[0]
-                    n_nodes = batch_x.shape[1]
-                    outputs = outputs.reshape(batch_size, n_nodes, -1)
-                
-                outputs = outputs.detach().cpu().numpy()
-                batch_y = batch_y.detach().cpu().numpy()
+                    if len(outputs.shape) == 2:
+                        batch_size = batch_x.shape[0]
+                        n_nodes = batch_x.shape[1]
+                        outputs = outputs.reshape(batch_size, n_nodes, -1)
+                    
+                    outputs = outputs.detach().cpu().numpy()
+                    batch_y = batch_y.detach().cpu().numpy()
 
-                if hasattr(test_data, 'inverse_transform') and self.args.inverse:
-                    shape = outputs.shape
-                    node_names = list(test_data.processed_data.keys())
-                    for node_idx, node_name in enumerate(node_names):
-                        if node_idx < shape[1]:
-                            for batch_idx in range(shape[0]):
-                                outputs[batch_idx, node_idx, :] = test_data.inverse_transform(
-                                    outputs[batch_idx, node_idx, :], 
-                                    node_name, 
-                                    target_col_only=True
-                                )
-                                batch_y[batch_idx, node_idx, :] = test_data.inverse_transform(
-                                    batch_y[batch_idx, node_idx, :], 
-                                    node_name, 
-                                    target_col_only=True
-                                )
+                    if hasattr(test_data, 'inverse_transform') and self.args.inverse:
+                        shape = outputs.shape
+                        node_names = list(test_data.processed_data.keys())
+                        for node_idx, node_name in enumerate(node_names):
+                            if node_idx < shape[1]:
+                                for batch_idx in range(shape[0]):
+                                    outputs[batch_idx, node_idx, :] = test_data.inverse_transform(
+                                        outputs[batch_idx, node_idx, :], 
+                                        node_name, 
+                                        target_col_only=True
+                                    )
+                                    batch_y[batch_idx, node_idx, :] = test_data.inverse_transform(
+                                        batch_y[batch_idx, node_idx, :], 
+                                        node_name, 
+                                        target_col_only=True
+                                    )
 
-                f_dim = 0 if self.args.features == "MS" else slice(None)
-                if isinstance(f_dim, int):
-                    outputs = outputs[:, :, :, f_dim] if len(outputs.shape) == 4 else outputs
-                    batch_y = batch_y[:, :, :, f_dim] if len(batch_y.shape) == 4 else batch_y
+                    f_dim = 0 if self.args.features == "MS" else slice(None)
+                    if isinstance(f_dim, int):
+                        outputs = outputs[:, :, :, f_dim] if len(outputs.shape) == 4 else outputs
+                        batch_y = batch_y[:, :, :, f_dim] if len(batch_y.shape) == 4 else batch_y
 
-                preds.append(outputs)
-                trues.append(batch_y)
-                
-                # 更新进度条
-                pbar.set_postfix({'batch': f'{count}/{len(test_loader)}'})
+                    preds.append(outputs)
+                    trues.append(batch_y)
+                    
+                    # 更新进度条
+                    pbar.set_postfix({'batch': f'{count}/{len(test_loader)}'})
 
-        avg_latency = total_latency / count
+                except Exception as e:
+                    print(f"Error in test batch {count}: {e}")
+                    continue
+
+        avg_latency = total_latency / count if count > 0 else 0
         print(f"\nInference Speed Summary:")
         print(f"- Total batches: {count}")
         print(f"- Average latency per batch: {avg_latency:.4f} seconds")
-        print(f"- Throughput: {len(test_loader.dataset)/total_latency:.2f} samples/s")
+        if count > 0:
+            print(f"- Throughput: {len(test_loader.dataset)/total_latency:.2f} samples/s")
 
         preds = np.concatenate(preds, axis=0)
         trues = np.concatenate(trues, axis=0)
@@ -347,3 +394,103 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
         np.save(folder_path + "pred.npy", preds)
         np.save(folder_path + "true.npy", trues)
         return
+
+
+def debug_batch_info(batch, batch_idx=0):
+    """调试函数：打印批次信息"""
+    print(f"\n=== Debug Batch {batch_idx} ===")
+    print(f"Type: {type(batch)}")
+    if hasattr(batch, 'x'):
+        print(f"batch.x shape: {batch.x.shape}")
+        print(f"batch.x device: {batch.x.device}")
+    if hasattr(batch, 'y'):
+        print(f"batch.y shape: {batch.y.shape}")
+        print(f"batch.y device: {batch.y.device}")
+    if hasattr(batch, 'edge_index'):
+        print(f"batch.edge_index shape: {batch.edge_index.shape}")
+        print(f"batch.edge_index device: {batch.edge_index.device}")
+        print(f"batch.edge_index range: [{batch.edge_index.min()}, {batch.edge_index.max()}]")
+    if hasattr(batch, 'batch'):
+        if batch.batch is not None:
+            print(f"batch.batch shape: {batch.batch.shape}")
+        else:
+            print(f"batch.batch: None")
+    print("=" * 30)
+
+
+# 测试函数
+def test_training_pipeline():
+    """测试完整的训练流程"""
+    print("=== Testing Fixed Training Pipeline ===")
+    
+    # 模拟参数
+    class Args:
+        def __init__(self):
+            self.model = 'GAT'
+            self.root_path = './sample_data'
+            self.seq_len = 96
+            self.pred_len = 24
+            self.target = 'Wspd'
+            self.batch_size = 4
+            self.train_epochs = 2
+            self.learning_rate = 0.001
+            self.patience = 3
+            self.use_amp = False
+            self.use_gpu = True
+            self.use_multi_gpu = False
+            self.device_ids = [0]
+            self.features = 'M'  # 'M' for multivariate, 'MS' for multivariate + single output
+            self.checkpoints = './checkpoints'
+            self.inverse = False
+            
+            # GAT 相关参数
+            self.n_heads = 8
+            self.dropout = 0.1
+            self.d_model = 512
+            self.d_ff = 2048
+            self.moving_avg = 25
+            self.noEx = True
+            self.stride = 8
+            self.patch_len = 16
+            self.task_name = 'long_term_forecast'
+            
+    args = Args()
+    
+    try:
+        # 创建实验对象
+        exp = Exp_Spatial_Long_Term_Forecast(args)
+        print("✓ Experiment object created successfully")
+        
+        # 测试数据加载
+        train_data, train_loader = exp._get_data('train')
+        print(f"✓ Train data loaded: {len(train_data)} nodes, {len(train_loader)} batches")
+        
+        # 测试第一个batch
+        first_batch = next(iter(train_loader))
+        debug_batch_info(first_batch, 0)
+        
+        # 构建模型
+        model = exp._build_model()
+        print(f"✓ Model built successfully")
+        
+        # 测试前向传播
+        first_batch = first_batch.to(exp.device)
+        graph_data = type('obj', (object,), {
+            'x': first_batch.x, 
+            'edge_index': first_batch.edge_index
+        })()
+        
+        with torch.no_grad():
+            outputs = model(graph_data)
+            print(f"✓ Forward pass successful: output shape {outputs.shape}")
+        
+        print("\n=== All Tests Passed! ===")
+        print("The pipeline is ready for training.")
+        
+        return exp, args
+        
+    except Exception as e:
+        print(f"✗ Test failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return None, None
