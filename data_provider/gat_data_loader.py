@@ -148,7 +148,7 @@ class TimeSeriesGraphDataset(Dataset):
             if file.endswith('.csv'):
                 files.append(os.path.join(self.data_dir, file))
         files = sorted(files)
-        print(f"Found {len(files)} data files")
+        #print(f"Found {len(files)} data files")
         return files
     
     def _load_all_data(self):
@@ -167,7 +167,7 @@ class TimeSeriesGraphDataset(Dataset):
                 
                 # 存储数据
                 all_data[node_name] = df
-                print(f"Loaded {node_name}: {len(df)} records")
+                #print(f"Loaded {node_name}: {len(df)} records")
                 
             except Exception as e:
                 print(f"Error loading {file_path}: {e}")

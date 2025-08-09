@@ -32,3 +32,4 @@ patool          # 保持不变，这个包很稳定
 networkx         # 图操作工具
 plotly        # 图可视化
 seaborn       # 增强可视化
+numba
