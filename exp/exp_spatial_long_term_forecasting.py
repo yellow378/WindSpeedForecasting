@@ -80,7 +80,7 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
 
                     # GAT模型预测
                     if self.args.use_amp:
-                        with torch.cuda.amp.autocast():
+                        with torch.amp.autocast():
                             # GAT模型接受GraphData格式
                             graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index})()
                             outputs = self.model(graph_data)
@@ -90,6 +90,7 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
 
                     # 处理输出维度
                     outputs = outputs.reshape(self.args.batch_size, -1, self.args.pred_len, 1)
+                    batch_y = batch_y.reshape(self.args.batch_size, -1, self.args.pred_len, 1)
                     
                     # 计算损失
                     if self.args.features == 'MS':
@@ -187,7 +188,8 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
 
                     # 处理输出维度
                     outputs = outputs.reshape(self.args.batch_size, -1, self.args.pred_len, 1)
-                    
+                    batch_y = batch_y.reshape(self.args.batch_size, -1, self.args.pred_len, 1)
+
                     if self.args.features == 'MS':
                         pred = outputs[:, :, :, 0] if len(outputs.shape) == 4 else outputs
                         true = batch_y[:, :, :, 0] if len(batch_y.shape) == 4 else batch_y
@@ -282,6 +284,7 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
                         outputs = self.model(graph_data)
                     # 处理输出维度
                     outputs = outputs.reshape(self.args.batch_size, -1, self.args.pred_len, 1)
+                    batch_y = batch_y.reshape(self.args.batch_size, -1, self.args.pred_len, 1)
                     
                     if self.device.type == 'cuda':
                         torch.cuda.synchronize()
