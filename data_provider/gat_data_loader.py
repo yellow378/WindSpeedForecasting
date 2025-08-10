@@ -710,7 +710,7 @@ def collate_fn(batch):
 def create_dataloader(args, flag):
     """修复：创建数据加载器，正确处理scaler共享"""
     shuffle_flag = flag == 'train'  # 只有训练集需要shuffle
-    drop_last = flag == 'train'
+    drop_last = True
     batch_size = args.batch_size
 
     # 根据args构建参数
