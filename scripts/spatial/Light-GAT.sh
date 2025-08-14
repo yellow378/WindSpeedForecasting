@@ -32,4 +32,4 @@ python run.py \
   --lradj type1 \
   --use_gpu True \
   --gpu 0 \
-  --edge_file ./dataset/spatial_wind/edges.csv
+  --edge_file ./dataset/spatial_wind/edges.npy

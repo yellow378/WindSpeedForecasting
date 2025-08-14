@@ -4,111 +4,12 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
-from scipy.stats import pearsonr, spearmanr
-from scipy.spatial.distance import pdist, squareform
-from sklearn.metrics.pairwise import pairwise_distances
 import warnings
+import re
+import glob
 warnings.filterwarnings('ignore')
-
-# 尝试导入PyTorch Geometric，如果失败则使用自定义类
-try:
-    from torch_geometric.data import Data, Batch
-    USE_TORCH_GEOMETRIC = True
-    print("Using PyTorch Geometric")
-except ImportError:
-    USE_TORCH_GEOMETRIC = False
-    print("PyTorch Geometric not available, using custom classes")
-
-
-class GraphData:
-    """
-    简单的图数据类，替代PyTorch Geometric的Data
-    """
-    def __init__(self, x=None, edge_index=None, y=None, **kwargs):
-        self.x = x
-        self.edge_index = edge_index
-        self.y = y
-        
-        # 存储额外的属性
-        for key, value in kwargs.items():
-            setattr(self, key, value)
-    
-    def to(self, device):
-        """将数据移动到指定设备"""
-        if self.x is not None:
-            self.x = self.x.to(device)
-        if self.edge_index is not None:
-            self.edge_index = self.edge_index.to(device)
-        if self.y is not None:
-            self.y = self.y.to(device)
-        return self
-
-
-class GraphBatch:
-    """
-    修复版本：简单的图批处理类，替代PyTorch Geometric的Batch
-    """
-    def __init__(self, batch_data):
-        """
-        :param batch_data: GraphData对象列表
-        """
-        self.batch_size = len(batch_data)
-        self.n_nodes = batch_data[0].x.shape[0] if batch_data[0].x is not None else 0
-        
-        # 合并x
-        if batch_data[0].x is not None:
-            # [batch_size, n_nodes, seq_len, n_features]
-            self.x = torch.stack([data.x for data in batch_data], dim=0)
-        else:
-            self.x = None
-        
-        # 合并y
-        if batch_data[0].y is not None:
-            # [batch_size, n_nodes, pred_len] or [batch_size * n_nodes, pred_len]
-            if len(batch_data[0].y.shape) == 2:  # [n_nodes, pred_len]
-                self.y = torch.stack([data.y for data in batch_data], dim=0)
-            else:  # [pred_len] - single node
-                self.y = torch.stack([data.y for data in batch_data], dim=0)
-        else:
-            self.y = None
-        
-        # 修复：边索引处理 - 不要在这里进行批处理偏移
-        # 每个batch中的所有图都有相同的结构，只保存单个图的边索引
-        if batch_data[0].edge_index is not None:
-            # 只保存原始的边索引，不进行批处理偏移
-            # 模型会在forward中处理批处理偏移
-            self.edge_index = batch_data[0].edge_index.clone()
-            
-            # 验证边索引的有效性
-            if self.edge_index.max() >= self.n_nodes:
-                print(f"Warning: Invalid edge_index in batch. Max index: {self.edge_index.max()}, n_nodes: {self.n_nodes}")
-                # 过滤无效边
-                valid_mask = (self.edge_index[0] < self.n_nodes) & (self.edge_index[1] < self.n_nodes)
-                self.edge_index = self.edge_index[:, valid_mask]
-                print(f"Filtered edges: {self.edge_index.shape[1]} edges remaining")
-            
-            # 创建batch标识符（用于某些可能需要的场景）
-            self.batch = torch.cat([torch.full((self.n_nodes,), i, dtype=torch.long) 
-                                   for i in range(self.batch_size)])
-        else:
-            self.edge_index = None
-            self.batch = None
-        
-        print(f"GraphBatch created: batch_size={self.batch_size}, n_nodes={self.n_nodes}, "
-              f"x_shape={self.x.shape if self.x is not None else None}, "
-              f"edge_shape={self.edge_index.shape if self.edge_index is not None else None}")
-    
-    def to(self, device):
-        """将数据移动到指定设备"""
-        if self.x is not None:
-            self.x = self.x.to(device)
-        if self.edge_index is not None:
-            self.edge_index = self.edge_index.to(device)
-        if self.y is not None:
-            self.y = self.y.to(device)
-        if self.batch is not None:
-            self.batch = self.batch.to(device)
-        return self
+from torch_geometric.data import Data, Batch
+print("Using PyTorch Geometric")
 
 
 class TimeSeriesGraphDataset(Dataset):
@@ -124,7 +25,7 @@ class TimeSeriesGraphDataset(Dataset):
         :param pred_len: 预测长度
         :param target_col: 目标列名
         :param scaler_type: 标准化类型 ('standard', 'minmax', None)
-        :param edge_file: 边文件路径，如果为None则自动生成
+        :param edge_file: 边文件路径
         :param flag: 数据集类型 ('train', 'val', 'test')
         :param shared_scalers: 共享的scaler（用于val/test集）
         """
@@ -134,27 +35,28 @@ class TimeSeriesGraphDataset(Dataset):
         self.target_col = target_col
         self.scaler_type = scaler_type
         self.flag = flag
-        self.shared_scalers = shared_scalers  # 修复：接收共享的scalers
+        self.shared_scalers = shared_scalers
         
-        print(f"Loading data files for {flag} set...")
-        # 加载所有数据文件
+        """
+        加载和预处理数据
+        NodeName: 1,2,3,,,
+        """
+        print(f"加载所有数据:{data_dir}...")
         self.data_files = self._get_data_files()
         self.raw_data = self._load_all_data()
         
-        print("Preprocessing data...")
-        # 预处理数据
+        print("开始处理数据...")
+        # 预处理数据， 包含正确处理scaler共享的逻辑
         self.processed_data, self.scalers = self._preprocess_data()
         
-        print("Generating/loading graph edges...")
+        print("加载表数据...")
         # 生成或加载边信息
         if edge_file and os.path.exists(edge_file):
-            self.edge_index = self._load_edge_index(edge_file)
+            self.edge_index, self.edge_weight = self._load_edge_index_and_weight(edge_file)
         else:
-            self.edge_index = self._generate_edges()
-            if edge_file:
-                self._save_edge_index(self.edge_index, edge_file)
-        
-        print(f"Creating samples for {flag} set...")
+            raise ValueError("Edge file must be provided and exist.")
+
+        print(f"创建样本索引：{flag}...")
         # 创建样本索引
         self.samples = self._create_samples()
         
@@ -182,40 +84,35 @@ class TimeSeriesGraphDataset(Dataset):
     
     def _get_data_files(self):
         """获取所有CSV数据文件"""
-        files = []
-        for file in os.listdir(self.data_dir):
-            if file.endswith('.csv'):
-                files.append(os.path.join(self.data_dir, file))
-        files = sorted(files)
-        print(f"Found {len(files)} data files")
-        return files
+        all_files = glob.glob(os.path.join(self.data_dir, "dated_*.csv"))
+        # 按照文件名中的数字进行排序
+        def extract_number(filename):
+            match = re.search(r'dated_Turb(\d+)\.csv', os.path.basename(filename))
+            return int(match.group(1)) if match else 0
+        
+        all_files.sort(key=extract_number)
+        return all_files
     
     def _load_all_data(self):
         """加载所有数据文件"""
         all_data = {}
-        
         for file_path in self.data_files:
-            node_name = os.path.basename(file_path).replace('.csv', '')
+            node_name = os.path.basename(file_path).replace('.csv', '').replace('dated_Turb', '')
             try:
                 df = pd.read_csv(file_path)
-                
                 # 解析日期时间
                 if 'date' in df.columns:
                     df['date'] = pd.to_datetime(df['date'])
                     df = df.sort_values('date').reset_index(drop=True)
                 
                 # 存储数据
-                all_data[node_name] = df
-                #print(f"Loaded {node_name}: {len(df)} records")
-                
+                all_data[int(node_name)-1] = df  # node index starts from 0
             except Exception as e:
                 print(f"Error loading {file_path}: {e}")
                 continue
-                
         return all_data
     
     def _preprocess_data(self):
-        """修复：预处理数据，正确处理scaler共享"""
         processed_data = {}
         scalers = {}
         
@@ -242,7 +139,7 @@ class TimeSeriesGraphDataset(Dataset):
                     features_df = features_df.fillna(method='ffill').fillna(method='bfill')
                     features = features_df.values
                 
-                # 修复：数据标准化 - 正确处理scaler共享
+                # 数据标准化 - 正确处理scaler共享
                 if self.scaler_type == 'standard':
                     scaler = StandardScaler()
                 elif self.scaler_type == 'minmax':
@@ -278,14 +175,10 @@ class TimeSeriesGraphDataset(Dataset):
                     'raw_features': features,
                     'columns': feature_cols,
                     'dates': df_filtered['date'].values if 'date' in df_filtered.columns else None
-                }
-                
-                #print(f"Processed {node_name}: {features_scaled.shape}")
-                
+                }             
             except Exception as e:
                 print(f"Error preprocessing {node_name}: {e}")
                 continue
-        
         return processed_data, scalers
     
     def _get_common_time_range(self):
@@ -313,229 +206,10 @@ class TimeSeriesGraphDataset(Dataset):
         print(f"Common time range: {min_start} to {max_end}")
         return min_start, max_end
     
-    def _generate_edges(self):
-        """修复：生成图的边，确保索引有效性"""
-        print("Generating graph edges based on correlation and similarity...")
-        
-        node_names = list(self.processed_data.keys())
-        n_nodes = len(node_names)
-        
-        if n_nodes < 2:
-            print("Warning: Only one node found, creating self-loop")
-            return torch.tensor([[0], [0]], dtype=torch.long)
-        
-        # 提取目标变量的时间序列用于相似性计算
-        target_series = []
-        valid_nodes = []  # 跟踪有效节点
-        
-        for i, node_name in enumerate(node_names):
-            data = self.processed_data[node_name]
-            if self.target_col in data['columns']:
-                target_idx = data['columns'].index(self.target_col)
-                series = data['features'][:, target_idx]
-                target_series.append(series)
-                valid_nodes.append(i)
-            else:
-                # 如果没有目标列，使用第一列
-                print(f"Warning: {self.target_col} not found in {node_name}, using first column")
-                series = data['features'][:, 0]
-                target_series.append(series)
-                valid_nodes.append(i)
-        
-        # 确保所有序列长度一致
-        if target_series:
-            min_length = min(len(series) for series in target_series)
-            target_series = [series[:min_length] for series in target_series]
-            target_series = np.array(target_series)  # [n_valid_nodes, time_steps]
-        else:
-            print("Error: No valid target series found")
-            return torch.tensor([[], []], dtype=torch.long)
-        
-        print(f"Computing similarities for {len(valid_nodes)} valid nodes with {min_length} time steps")
-        
-        # 计算多种相似性度量
-        similarity_matrices = {}
-        
-        # 1. 皮尔逊相关系数
-        similarity_matrices['pearson'] = self._compute_pearson_correlation(target_series)
-        
-        # 2. 斯皮尔曼相关系数  
-        similarity_matrices['spearman'] = self._compute_spearman_correlation(target_series)
-        
-        # 3. 余弦相似性
-        similarity_matrices['cosine'] = self._compute_cosine_similarity(target_series)
-        
-        # 4. 欧氏距离相似性
-        similarity_matrices['euclidean'] = self._compute_euclidean_similarity(target_series)
-        
-        # 组合多种相似性度量
-        edge_index = self._combine_similarities(similarity_matrices, valid_nodes, n_nodes)
-        
-        # 修复：最终验证生成的边索引
-        if edge_index.numel() > 0:
-            max_idx = edge_index.max().item()
-            if max_idx >= n_nodes:
-                print(f"ERROR in edge generation: max index {max_idx} >= n_nodes {n_nodes}")
-                # 过滤无效边
-                valid_mask = (edge_index[0] < n_nodes) & (edge_index[1] < n_nodes)
-                edge_index = edge_index[:, valid_mask]
-                print(f"Filtered to {edge_index.shape[1]} valid edges")
-        
-        return edge_index
-    
-    def _compute_pearson_correlation(self, series):
-        """计算皮尔逊相关系数矩阵"""
-        n_nodes = series.shape[0]
-        corr_matrix = np.zeros((n_nodes, n_nodes))
-        
-        for i in range(n_nodes):
-            for j in range(n_nodes):
-                if i == j:
-                    corr_matrix[i, j] = 1.0
-                else:
-                    try:
-                        corr, _ = pearsonr(series[i], series[j])
-                        corr_matrix[i, j] = abs(corr) if not np.isnan(corr) else 0.0
-                    except:
-                        corr_matrix[i, j] = 0.0
-        
-        return corr_matrix
-    
-    def _compute_spearman_correlation(self, series):
-        """计算斯皮尔曼相关系数矩阵"""
-        n_nodes = series.shape[0]
-        corr_matrix = np.zeros((n_nodes, n_nodes))
-        
-        for i in range(n_nodes):
-            for j in range(n_nodes):
-                if i == j:
-                    corr_matrix[i, j] = 1.0
-                else:
-                    try:
-                        corr, _ = spearmanr(series[i], series[j])
-                        corr_matrix[i, j] = abs(corr) if not np.isnan(corr) else 0.0
-                    except:
-                        corr_matrix[i, j] = 0.0
-        
-        return corr_matrix
-    
-    def _compute_euclidean_similarity(self, series):
-        """计算欧氏距离相似性"""
-        try:
-            distances = pairwise_distances(series, metric='euclidean')
-            max_dist = np.max(distances)
-            if max_dist > 0:
-                similarity_matrix = 1 - (distances / max_dist)
-            else:
-                similarity_matrix = np.ones_like(distances)
-            return similarity_matrix
-        except:
-            n_nodes = series.shape[0]
-            return np.eye(n_nodes)
-    
-    def _compute_cosine_similarity(self, series):
-        """计算余弦相似性"""
-        try:
-            from sklearn.metrics.pairwise import cosine_similarity
-            similarity_matrix = cosine_similarity(series)
-            return np.abs(similarity_matrix)  # 取绝对值
-        except:
-            n_nodes = series.shape[0]
-            return np.eye(n_nodes)
-    
-    def _combine_similarities(self, similarity_matrices, valid_nodes, total_nodes, threshold=0.3, top_k=3):
-        """修复：组合多种相似性度量生成边，确保索引映射正确"""
-        n_valid = len(valid_nodes)
-        
-        # 权重组合不同的相似性度量
-        weights = {
-            'pearson': 0.4,
-            'spearman': 0.3,
-            'euclidean': 0.15,
-            'cosine': 0.15
-        }
-        
-        # 计算加权平均相似性
-        combined_similarity = np.zeros((n_valid, n_valid))
-        for metric, weight in weights.items():
-            if metric in similarity_matrices:
-                combined_similarity += weight * similarity_matrices[metric]
-        
-        # 生成边的方法：每个节点的top-k连接 + 阈值过滤
-        edges = set()
-        
-        # 方法1: Top-K连接
-        for i in range(n_valid):
-            similarities = combined_similarity[i].copy()
-            similarities[i] = -1  # 排除自连接
-            
-            # 获取top-k个最相似的节点
-            if np.max(similarities) > 0:
-                top_indices = np.argsort(similarities)[-top_k:]
-                for j in top_indices:
-                    if similarities[j] > threshold:
-                        # 映射回原始节点索引
-                        orig_i = valid_nodes[i]
-                        orig_j = valid_nodes[j]
-                        edges.add((orig_i, orig_j))
-                        edges.add((orig_j, orig_i))  # 无向图
-        
-        # 方法2: 如果边太少，降低阈值
-        if len(edges) < n_valid:
-            print(f"Too few edges ({len(edges)}), lowering threshold")
-            lower_threshold = threshold * 0.5
-            for i in range(n_valid):
-                for j in range(n_valid):
-                    if i != j and combined_similarity[i, j] > lower_threshold:
-                        orig_i = valid_nodes[i]
-                        orig_j = valid_nodes[j]
-                        edges.add((orig_i, orig_j))
-                        edges.add((orig_j, orig_i))
-        
-        # 方法3: 如果还是没有足够的边，创建基于距离的连接
-        if len(edges) < n_valid:
-            print("Creating distance-based connections")
-            for i in range(n_valid):
-                # 至少连接到一个最相似的节点
-                similarities = combined_similarity[i].copy()
-                similarities[i] = -1
-                if np.max(similarities) > 0:
-                    best_j = np.argmax(similarities)
-                    orig_i = valid_nodes[i]
-                    orig_j = valid_nodes[best_j]
-                    edges.add((orig_i, orig_j))
-                    edges.add((orig_j, orig_i))
-        
-        # 转换为tensor并验证
-        if len(edges) == 0:
-            # 创建自环作为最后的备选
-            edges = [(i, i) for i in valid_nodes]
-        
-        edges_list = list(edges)
-        if edges_list:
-            edge_index = torch.tensor(edges_list, dtype=torch.long).t().contiguous()
-        else:
-            edge_index = torch.tensor([[], []], dtype=torch.long)
-        
-        # 修复：最终验证 - 确保所有边索引都在有效范围内
-        if edge_index.numel() > 0:
-            max_idx = edge_index.max().item()
-            if max_idx >= total_nodes:
-                print(f"ERROR: Generated edge_index contains invalid indices!")
-                print(f"Max index: {max_idx}, total_nodes: {total_nodes}")
-                # 强制过滤
-                valid_mask = (edge_index[0] < total_nodes) & (edge_index[1] < total_nodes)
-                edge_index = edge_index[:, valid_mask]
-        
-        print(f"Generated {edge_index.shape[1] if edge_index.numel() > 0 else 0} edges for {total_nodes} nodes")
-        if edge_index.numel() > 0:
-            print(f"Edge index range: [{edge_index.min().item()}, {edge_index.max().item()}]")
-        return edge_index
-    
     def _create_samples(self):
         """创建训练样本，按照flag进行7:2:1划分"""
         samples = []
-        node_names = list(self.processed_data.keys())
+        node_names = sorted(list(self.processed_data.keys()))
         
         if not node_names:
             raise ValueError("No valid data found")
@@ -609,67 +283,38 @@ class TimeSeriesGraphDataset(Dataset):
         x = torch.FloatTensor(np.array(node_features))  # [n_nodes, seq_len, n_features]
         y = torch.FloatTensor(np.array(target_values))   # [n_nodes, pred_len]
         
-        # 创建图数据对象 - 根据可用库选择
-        if USE_TORCH_GEOMETRIC:
-            graph_data = Data(
-                x=x,
-                edge_index=self.edge_index,
-                y=y
-            )
-        else:
-            graph_data = GraphData(
-                x=x,
-                edge_index=self.edge_index,
-                y=y
-            )
+        # 创建图数据对象 - 根据可用库选择，并加上edge_weight
+        graph_data = Data(
+            x=x,
+            edge_index=self.edge_index,
+            y=y,
+            edge_weight=self.edge_weight if hasattr(self, 'edge_weight') else None
+        )
         
         return graph_data
-    
-    def _save_edge_index(self, edge_index, file_path):
-        """保存边索引到文件"""
-        if edge_index.numel() == 0:
-            print("No edges to save!")
-            return
-            
-        edges_df = pd.DataFrame({
-            'source': edge_index[0].numpy(),
-            'target': edge_index[1].numpy()
-        })
-        edges_df.to_csv(file_path, index=False)
-        print(f"Edges saved to {file_path}")
-    
-    def _load_edge_index(self, file_path):
+
+    def _load_edge_index_and_weight(self, file_path):
         """从文件加载边索引"""
+
         try:
-            edges_df = pd.read_csv(file_path)
-            if len(edges_df) == 0:
-                print("Empty edge file, creating minimal edges")
-                n_nodes = len(self.processed_data)
-                return torch.tensor([[i for i in range(n_nodes)], 
-                                   [i for i in range(n_nodes)]], dtype=torch.long)
-                
-            edge_index = torch.tensor([edges_df['source'].values, edges_df['target'].values], dtype=torch.long)
-            print(f"Loaded {edge_index.shape[1]} edges from {file_path}")
-            
-            # 验证加载的边索引
-            n_nodes = len(self.processed_data)
-            if edge_index.numel() > 0:
-                max_idx = edge_index.max().item()
-                if max_idx >= n_nodes:
-                    print(f"Warning: Loaded edge_index contains invalid indices!")
-                    print(f"Max index: {max_idx}, n_nodes: {n_nodes}")
-                    # 过滤无效边
-                    valid_mask = (edge_index[0] < n_nodes) & (edge_index[1] < n_nodes)
-                    edge_index = edge_index[:, valid_mask]
-                    print(f"Filtered to {edge_index.shape[1]} valid edges")
-            
-            return edge_index
+            # 假设 file_path 是 .npy 文件，内容为 [n_nodes, n_nodes] 的邻接矩阵（权重矩阵）
+            adj_matrix = np.load(file_path)  # shape: [n_nodes, n_nodes]
+            n_nodes = adj_matrix.shape[0]
+            # 找到所有非零元素（即存在边的地方）
+            src, tgt = np.nonzero(adj_matrix)
+            edge_index = torch.tensor([src, tgt], dtype=torch.long)
+            edge_weight = torch.tensor([src,tgt,adj_matrix[src, tgt]], dtype=torch.float)
+            print(f"Loaded {edge_index.shape[1]} edges from {file_path} (npy)")
+            # 注意：节点编号0对应 node_name 为1 的风机节点
+            return edge_index, edge_weight
         except Exception as e:
-            print(f"Error loading edge file {file_path}: {e}")
-            # 创建默认边索引
+            print(f"Error loading edge npy file {file_path}: {e}")
+            # 创建默认自环边
             n_nodes = len(self.processed_data)
-            return torch.tensor([[i for i in range(n_nodes)], 
-                               [i for i in range(n_nodes)]], dtype=torch.long)
+            edge_index = torch.tensor([[i for i in range(n_nodes)], 
+                          [i for i in range(n_nodes)]], dtype=torch.long)
+            edge_weight = torch.ones(n_nodes, dtype=torch.float)
+            return edge_index, edge_weight
     
     def get_scaler(self, node_name):
         """获取特定节点的标准化器"""
@@ -698,13 +343,9 @@ class TimeSeriesGraphDataset(Dataset):
         
         return data
 
-
 def collate_fn(batch):
     """自定义批处理函数"""
-    if USE_TORCH_GEOMETRIC:
-        return Batch.from_data_list(batch)
-    else:
-        return GraphBatch(batch)
+    return Batch.from_data_list(batch)
 
 
 def create_dataloader(args, flag):
@@ -772,635 +413,3 @@ def create_all_dataloaders(args):
         'val': (val_loader, val_dataset),
         'test': (test_loader, test_dataset)
     }
-
-
-# 测试函数
-def test_dataloader():
-    """测试数据加载器的功能"""
-    
-    # 创建示例数据
-    def create_sample_data(data_dir='./sample_data', n_files=5, n_timesteps=500):
-        """创建示例数据文件用于测试"""
-        os.makedirs(data_dir, exist_ok=True)
-        
-        np.random.seed(42)
-        
-        for i in range(n_files):
-            # 生成时间序列数据
-            dates = pd.date_range('2024-01-01', periods=n_timesteps, freq='10T')
-            
-            # 生成相关的时间序列
-            base_trend = np.sin(np.linspace(0, 4*np.pi, n_timesteps)) * 10 + 50
-            noise = np.random.normal(0, 2, n_timesteps)
-            
-            # Wspd - 风速（目标变量）
-            wspd = np.maximum(0, base_trend + noise + np.random.normal(0, 1, n_timesteps))
-            
-            # 其他相关变量
-            wdir = np.random.uniform(0, 360, n_timesteps)  # 风向
-            etmp = base_trend * 0.5 + np.random.normal(25, 3, n_timesteps)  # 环境温度
-            itmp = etmp + np.random.normal(3, 1, n_timesteps)  # 内部温度
-            ndir = np.random.uniform(0, 360, n_timesteps)  # 机舱方向
-            
-            # 功率相关变量
-            pab1 = np.random.choice([0, 1], n_timesteps, p=[0.1, 0.9])
-            pab2 = np.random.choice([0, 1], n_timesteps, p=[0.1, 0.9])
-            pab3 = np.random.choice([0, 1], n_timesteps, p=[0.1, 0.9])
-            
-            # 功率输出（与风速相关）
-            prtv = wspd * 0.05 + np.random.normal(0, 0.3, n_timesteps)
-            patv = np.maximum(0, wspd * 5 + np.random.normal(0, 30, n_timesteps))
-            
-            # 创建DataFrame
-            df = pd.DataFrame({
-                'date': dates,
-                'Wspd': wspd,
-                'Wdir': wdir,
-                'Etmp': etmp,
-                'Itmp': itmp,
-                'Ndir': ndir,
-                'Pab1': pab1,
-                'Pab2': pab2,
-                'Pab3': pab3,
-                'Prtv': prtv,
-                'Patv': patv
-            })
-            
-            # 保存文件
-            filename = f'turbine_{i+1:02d}.csv'
-            df.to_csv(os.path.join(data_dir, filename), index=False)
-            
-        print(f"Created {n_files} sample data files in {data_dir}")
-    
-    # 如果没有数据目录，创建示例数据
-    data_dir = './sample_data'
-    if not os.path.exists(data_dir) or len(os.listdir(data_dir)) == 0:
-        create_sample_data(data_dir)
-    
-    # 测试数据加载器
-    print("\n=== Testing DataLoader ===")
-    try:
-        # 创建配置对象
-        class TestArgs:
-            def __init__(self):
-                self.root_path = data_dir
-                self.batch_size = 4
-                self.seq_len = 96
-                self.pred_len = 24
-                self.target = 'Wspd'
-                self.edge_file = os.path.join(data_dir, 'generated_edges.csv')
-        
-        args = TestArgs()
-        
-        # 测试修复后的dataloader创建
-        dataloaders = create_all_dataloaders(args)
-        
-        train_loader, train_dataset = dataloaders['train']
-        val_loader, val_dataset = dataloaders['val']
-        test_loader, test_dataset = dataloaders['test']
-        
-        print(f"Train dataset size: {len(train_dataset)}")
-        print(f"Val dataset size: {len(val_dataset)}")
-        print(f"Test dataset size: {len(test_dataset)}")
-        print(f"Number of nodes: {len(train_dataset.processed_data)}")
-        print(f"Number of edges: {train_dataset.edge_index.shape[1] if train_dataset.edge_index.numel() > 0 else 0}")
-        
-        # 测试几个批次
-        print("\n=== Testing Train Loader ===")
-        for i, batch in enumerate(train_loader):
-            print(f"Batch {i}:")
-            print(f"  Input shape (x): {batch.x.shape}")
-            print(f"  Target shape (y): {batch.y.shape}")
-            print(f"  Edge index shape: {batch.edge_index.shape if batch.edge_index is not None else 'None'}")
-            
-            if hasattr(batch, 'batch') and batch.batch is not None:
-                print(f"  Batch tensor shape: {batch.batch.shape}")
-            
-            if i >= 1:  # 只看前2个批次
-                break
-        
-        # 测试验证集（检查scaler是否正确共享）
-        print("\n=== Testing Val Loader (Scaler Sharing) ===")
-        for i, batch in enumerate(val_loader):
-            print(f"Val Batch {i}:")
-            print(f"  Input shape (x): {batch.x.shape}")
-            print(f"  Target shape (y): {batch.y.shape}")
-            
-            # 验证scaler共享
-            node_names = list(train_dataset.processed_data.keys())
-            if node_names:
-                train_scaler = train_dataset.get_scaler(node_names[0])
-                val_scaler = val_dataset.get_scaler(node_names[0])
-                print(f"  Scaler sharing check: {train_scaler is val_scaler}")
-            
-            if i >= 0:  # 只看1个批次
-                break
-        
-        # 测试反标准化
-        print("\n=== Testing Inverse Transform ===")
-        node_names = list(train_dataset.processed_data.keys())
-        if len(node_names) > 0:
-            # 从训练集获取一个样本
-            for batch in train_loader:
-                sample_data = batch.y[0, 0, :].numpy()  # 第一个样本，第一个节点
-                break
-                
-            original_data = train_dataset.inverse_transform(
-                sample_data, 
-                node_names[0], 
-                target_col_only=True
-            )
-            print(f"Transformed data range: [{sample_data.min():.3f}, {sample_data.max():.3f}]")
-            print(f"Original data range: [{original_data.min():.3f}, {original_data.max():.3f}]")
-        
-        print("\n=== Test Completed Successfully! ===")
-        return dataloaders
-        
-    except Exception as e:
-        print(f"Error during testing: {e}")
-        import traceback
-        traceback.print_exc()
-
-
-# 配置类
-class DataConfig:
-    """数据配置类，兼容GAT模型"""
-    def __init__(self):
-        # 数据路径配置
-        self.root_path = '../dataset/spatial_wind'  # 数据目录
-        
-        # 序列长度配置
-        self.seq_len = 96
-        self.pred_len = 24
-        
-        # 目标变量配置
-        self.target = 'Wspd'
-        self.enc_in = 10  # 输入特征数量
-        self.c_out = 1    # 输出特征数量
-        self.out_channels = 1  # GAT输出通道数
-        
-        # 数据预处理配置
-        self.scaler_type = 'standard'  # 'standard', 'minmax', None
-        
-        # 批处理配置
-        self.batch_size = 32
-        self.num_workers = 0
-        self.shuffle = True
-        
-        # 图配置
-        self.n_nodes = None  # 将在运行时确定
-        self.heads = 8
-        self.dropout = 0.1
-        
-        # 边生成配置
-        self.correlation_threshold = 0.3
-        self.top_k_edges = 3
-        
-        # 模型配置（与LightTime兼容）
-        self.d_model = 512
-        self.d_ff = 2048
-        self.n_heads = 8
-        self.moving_avg = 25
-        self.noEx = True
-        self.stride = 8
-        self.patch_len = 16
-        self.task_name = 'long_term_forecast'
-        
-        # 修复：添加scaler存储
-        self.train_scalers = None
-
-
-# 高级边生成器（独立版本）
-class AdvancedEdgeGenerator:
-    """高级边生成器，不依赖PyTorch Geometric"""
-    
-    def __init__(self, data_dir, target_col='Wspd'):
-        self.data_dir = data_dir
-        self.target_col = target_col
-        self.data = self._load_data()
-        
-    def _load_data(self):
-        """加载数据"""
-        data = {}
-        for file in os.listdir(self.data_dir):
-            if file.endswith('.csv'):
-                node_name = file.replace('.csv', '')
-                try:
-                    df = pd.read_csv(os.path.join(self.data_dir, file))
-                    data[node_name] = df
-                    print(f"Loaded {node_name}: {len(df)} records")
-                except Exception as e:
-                    print(f"Error loading {file}: {e}")
-        return data
-    
-    def generate_edges(self, methods=['correlation'], output_file='edges.csv', 
-                      threshold=0.3, top_k=3, visualization=False):
-        """
-        生成边文件
-        :param methods: 使用的方法 ['correlation', 'mutual_info', 'granger']
-        :param output_file: 输出文件
-        :param threshold: 相似性阈值
-        :param top_k: 每个节点保持的最高连接数
-        :param visualization: 是否可视化
-        """
-        if not self.data:
-            print("No data loaded!")
-            return []
-            
-        node_names = list(self.data.keys())
-        n_nodes = len(node_names)
-        
-        print(f"Generating edges for {n_nodes} nodes using methods: {methods}")
-        
-        # 提取目标变量序列
-        target_series = self._extract_target_series(node_names)
-        
-        if not target_series:
-            print("No valid target series found!")
-            return []
-        
-        # 计算相似性
-        edge_weights = {}
-        
-        if 'correlation' in methods:
-            edge_weights.update(self._correlation_analysis(target_series, node_names))
-        
-        if 'mutual_info' in methods:
-            edge_weights.update(self._mutual_info_analysis(target_series, node_names))
-            
-        if 'granger' in methods:
-            edge_weights.update(self._granger_analysis(target_series, node_names))
-        
-        # 生成最终边列表
-        edges = self._combine_edge_weights(edge_weights, threshold, top_k)
-        
-        # 保存边文件
-        self._save_edges(edges, node_names, output_file)
-        
-        # 可视化
-        if visualization:
-            self._visualize_graph(edges, node_names)
-        
-        return edges
-    
-    def _extract_target_series(self, node_names):
-        """提取目标变量序列"""
-        target_series = {}
-        
-        for node_name in node_names:
-            df = self.data[node_name]
-            
-            if self.target_col in df.columns:
-                series = df[self.target_col].dropna().values
-                if len(series) > 0:
-                    target_series[node_name] = series
-            else:
-                # 使用第一个数值列
-                numeric_cols = df.select_dtypes(include=[np.number]).columns
-                if len(numeric_cols) > 0:
-                    series = df[numeric_cols[0]].dropna().values
-                    if len(series) > 0:
-                        target_series[node_name] = series
-                        
-        print(f"Extracted target series for {len(target_series)} nodes")
-        return target_series
-    
-    def _correlation_analysis(self, target_series, node_names):
-        """相关性分析"""
-        edges = {}
-        
-        for i, node1 in enumerate(node_names):
-            if node1 not in target_series:
-                continue
-                
-            for j, node2 in enumerate(node_names):
-                if node2 not in target_series or i == j:
-                    continue
-                
-                try:
-                    # 确保序列长度一致
-                    series1 = target_series[node1]
-                    series2 = target_series[node2]
-                    min_len = min(len(series1), len(series2))
-                    
-                    if min_len < 10:  # 至少需要10个数据点
-                        continue
-                    
-                    s1 = series1[:min_len]
-                    s2 = series2[:min_len]
-                    
-                    # 皮尔逊相关系数
-                    corr, p_value = pearsonr(s1, s2)
-                    
-                    if not np.isnan(corr) and p_value < 0.05:
-                        edges[(i, j)] = abs(corr)
-                        
-                except Exception as e:
-                    continue
-        
-        print(f"Correlation analysis: found {len(edges)} significant correlations")
-        return edges
-    
-    def _mutual_info_analysis(self, target_series, node_names):
-        """互信息分析"""
-        try:
-            from sklearn.feature_selection import mutual_info_regression
-            
-            edges = {}
-            
-            for i, node1 in enumerate(node_names):
-                if node1 not in target_series:
-                    continue
-                    
-                for j, node2 in enumerate(node_names):
-                    if node2 not in target_series or i == j:
-                        continue
-                    
-                    try:
-                        series1 = target_series[node1]
-                        series2 = target_series[node2]
-                        min_len = min(len(series1), len(series2))
-                        
-                        if min_len < 10:
-                            continue
-                        
-                        X = series1[:min_len].reshape(-1, 1)
-                        y = series2[:min_len]
-                        
-                        mi = mutual_info_regression(X, y, random_state=42)[0]
-                        if mi > 0.1:  # 阈值过滤
-                            edges[(i, j)] = mi
-                            
-                    except Exception as e:
-                        continue
-            
-            print(f"Mutual info analysis: found {len(edges)} significant connections")
-            return edges
-            
-        except ImportError:
-            print("sklearn not available for mutual info analysis")
-            return {}
-    
-    def _granger_analysis(self, target_series, node_names):
-        """格兰杰因果分析"""
-        try:
-            from statsmodels.tsa.stattools import grangercausalitytests
-            
-            edges = {}
-            
-            for i, node1 in enumerate(node_names):
-                if node1 not in target_series:
-                    continue
-                    
-                for j, node2 in enumerate(node_names):
-                    if node2 not in target_series or i == j:
-                        continue
-                    
-                    try:
-                        series1 = target_series[node1]
-                        series2 = target_series[node2]
-                        min_len = min(len(series1), len(series2))
-                        
-                        if min_len < 50:  # 格兰杰检验需要更多数据点
-                            continue
-                        
-                        s1 = series1[:min_len]
-                        s2 = series2[:min_len]
-                        
-                        # 构建数据矩阵 [s2, s1] - 测试s1是否Granger导致s2
-                        data = np.column_stack([s2, s1])
-                        
-                        # 进行格兰杰因果检验
-                        max_lags = min(10, min_len // 20)
-                        if max_lags < 1:
-                            continue
-                            
-                        result = grangercausalitytests(data, maxlag=max_lags, verbose=False)
-                        
-                        # 获取最小p值
-                        min_p_value = 1.0
-                        for lag in range(1, max_lags + 1):
-                            if lag in result:
-                                p_val = result[lag][0]['ssr_ftest'][1]
-                                min_p_value = min(min_p_value, p_val)
-                        
-                        if min_p_value < 0.05:
-                            edges[(i, j)] = 1 - min_p_value
-                            
-                    except Exception as e:
-                        continue
-            
-            print(f"Granger causality: found {len(edges)} causal relationships")
-            return edges
-            
-        except ImportError:
-            print("statsmodels not available for Granger causality")
-            return {}
-    
-    def _combine_edge_weights(self, edge_weights, threshold, top_k):
-        """组合边权重"""
-        # 统计每条边的权重
-        edge_scores = {}
-        for (i, j), weight in edge_weights.items():
-            if (i, j) not in edge_scores:
-                edge_scores[(i, j)] = []
-            edge_scores[(i, j)].append(weight)
-        
-        # 计算平均权重
-        edges = []
-        for (i, j), weights in edge_scores.items():
-            avg_weight = np.mean(weights)
-            if avg_weight > threshold:
-                edges.append((i, j, avg_weight))
-        
-        # 如果边太少，选择每个节点的top-k连接
-        n_nodes = len(set([i for i, j, w in edges] + [j for i, j, w in edges]))
-        if len(edges) < n_nodes * 0.5:  # 如果边数量太少
-            print("Adding top-k connections per node")
-            
-            # 为每个节点添加top-k连接
-            node_connections = {}
-            for (i, j), weights in edge_scores.items():
-                if i not in node_connections:
-                    node_connections[i] = []
-                node_connections[i].append((j, np.mean(weights)))
-            
-            for i, connections in node_connections.items():
-                # 按权重排序
-                connections.sort(key=lambda x: x[1], reverse=True)
-                
-                # 添加top-k连接
-                for j, weight in connections[:top_k]:
-                    edge_tuple = (i, j, weight)
-                    if edge_tuple not in edges:
-                        edges.append(edge_tuple)
-        
-        print(f"Final edge count: {len(edges)}")
-        return edges
-    
-    def _save_edges(self, edges, node_names, output_file):
-        """保存边到文件"""
-        if not edges:
-            print("No edges to save!")
-            return
-        
-        edge_data = []
-        for source_idx, target_idx, weight in edges:
-            if source_idx < len(node_names) and target_idx < len(node_names):
-                edge_data.append({
-                    'source': source_idx,
-                    'target': target_idx,
-                    'source_name': node_names[source_idx],
-                    'target_name': node_names[target_idx],
-                    'weight': weight
-                })
-        
-        if edge_data:
-            df = pd.DataFrame(edge_data)
-            df.to_csv(output_file, index=False)
-            print(f"Saved {len(edge_data)} edges to {output_file}")
-        else:
-            print("No valid edges to save!")
-    
-    def _visualize_graph(self, edges, node_names):
-        """可视化图结构"""
-        try:
-            import matplotlib.pyplot as plt
-            import networkx as nx
-            
-            G = nx.DiGraph()
-            
-            # 添加节点
-            for i, name in enumerate(node_names):
-                G.add_node(i, label=name)
-            
-            # 添加边（假设edges是(source, target, weight)的元组列表）
-            for source, target, weight in edges:
-                G.add_edge(source, target, weight=weight)
-            
-            # 绘制图
-            plt.figure(figsize=(12, 8))
-            pos = nx.spring_layout(G, k=1.5, iterations=50)
-            
-            # 绘制节点
-            nx.draw_networkx_nodes(
-                G, pos, 
-                node_color='lightblue', 
-                node_size=1000, 
-                alpha=0.7
-            )
-            
-            # 绘制边（带权重）
-            if edges:
-                weights = [d['weight'] for (u, v, d) in G.edges(data=True)]
-                max_weight = max(weights) if weights else 1
-                normalized_weights = [w/max_weight * 3 for w in weights]
-                
-                nx.draw_networkx_edges(
-                    G, pos,
-                    width=normalized_weights,
-                    alpha=0.6, 
-                    edge_color='gray',
-                    arrows=True
-                )
-            
-            # 添加标签
-            labels = {i: name[:8] for i, name in enumerate(node_names)}  # 截短标签
-            nx.draw_networkx_labels(
-                G, pos, 
-                labels, 
-                font_size=8
-            )
-            
-            plt.title(f"Graph Structure ({len(node_names)} nodes, {len(edges)} edges)")
-            plt.axis('off')
-            plt.tight_layout()
-            plt.savefig('graph_structure.png', dpi=300, bbox_inches='tight')
-            plt.show()
-            print("Graph visualization saved as 'graph_structure.png'")
-            
-        except ImportError:
-            print("matplotlib or networkx not available for visualization")
-        except Exception as e:
-            print(f"Error creating visualization: {e}")
-def main():
-    """主函数 - 完整的使用流程"""
-    
-    print("=== Standalone Time Series Graph DataLoader ===")
-    
-    # 配置参数
-    config = DataConfig()
-    config.data_dir = './sample_data'  # 你的数据目录
-    config.edge_file = './edges.csv'   # 边文件路径
-    
-    # 如果没有数据，创建示例数据
-    if not os.path.exists(config.data_dir):
-        print("Creating sample data...")
-        test_dataloader()
-    
-    # 步骤1: 生成边文件（如果不存在）
-    if not os.path.exists(config.edge_file):
-        print("\nStep 1: Generating graph edges...")
-        edge_generator = AdvancedEdgeGenerator(config.data_dir, target_col=config.target_col)
-        
-        edges = edge_generator.generate_edges(
-            methods=['correlation', 'mutual_info'],
-            output_file=config.edge_file,
-            threshold=config.correlation_threshold,
-            top_k=config.top_k_edges,
-            visualization=True
-        )
-    else:
-        print(f"Using existing edge file: {config.edge_file}")
-    
-    # 步骤2: 创建数据加载器
-    print("\nStep 2: Creating dataloader...")
-    try:
-        train_loader, train_dataset = create_dataloader(
-            data_dir=config.data_dir,
-            batch_size=config.batch_size,
-            seq_len=config.seq_len,
-            pred_len=config.pred_len,
-            target_col=config.target_col,
-            scaler_type=config.scaler_type,
-            edge_file=config.edge_file,
-            shuffle=config.shuffle
-        )
-        
-        # 更新配置
-        config.n_nodes = len(train_dataset.processed_data)
-        config.enc_in = list(train_dataset.processed_data.values())[0]['features'].shape[1]
-        
-        print(f"Training dataset: {len(train_dataset)} samples")
-        print(f"Number of nodes: {config.n_nodes}")
-        print(f"Features per node: {config.enc_in}")
-        
-        # 步骤3: 测试数据加载
-        print("\nStep 3: Testing data loading...")
-        for i, batch in enumerate(train_loader):
-            print(f"Batch {i}: x={batch.x.shape}, y={batch.y.shape}, edges={batch.edge_index.shape[1]}")
-            
-            if i >= 2:  # 只测试前3个批次
-                break
-        
-        print("\n=== Setup Complete ===")
-        print("DataLoader is ready to use with your ST-GAT model!")
-        print("\nUsage example:")
-        print("```python")
-        print("for batch in train_loader:")
-        print("    # batch.x: [batch_size, n_nodes, seq_len, n_features]")
-        print("    # batch.y: [batch_size, n_nodes, pred_len]")  
-        print("    # batch.edge_index: [2, num_edges]")
-        print("    predictions = model(batch)")
-        print("```")
-        
-        return train_loader, train_dataset, config
-        
-    except Exception as e:
-        print(f"Error creating dataloader: {e}")
-        import traceback
-        traceback.print_exc()
-        return None, None, None
-
-if __name__ == "__main__":
-    main()

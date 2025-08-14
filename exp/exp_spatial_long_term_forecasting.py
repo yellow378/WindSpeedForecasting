@@ -136,7 +136,7 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
         criterion = self._select_criterion()
 
         if self.args.use_amp:
-            scaler = torch.cuda.amp.GradScaler()
+            scaler = torch.amp.GradScaler()
 
         # 打印训练信息
         print(f"\n=== Training Setup ===")
@@ -168,6 +168,7 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
                     batch_x = batch.x      # [batch_size, n_nodes, seq_len, n_features]
                     batch_y = batch.y      # [batch_size, n_nodes, pred_len]
                     edge_index = batch.edge_index  # [2, num_edges] - 原始边索引
+                    edge_weight = batch.edge_weight if hasattr(batch, 'edge_weight') else None
                     
                     # 调试输出（仅第一个batch）
                     if epoch == 0 and i == 0:
@@ -175,9 +176,10 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
                         print(f"  batch_x shape: {batch_x.shape}")
                         print(f"  batch_y shape: {batch_y.shape}")
                         print(f"  edge_index shape: {edge_index.shape}")
-                        print(f"  edge_index range: [{edge_index.min()}, {edge_index.max()}]")
-                        print(f"  n_nodes from x: {batch_x.shape[1]}")
-
+                       # print(f"  edge_index range: [{edge_index.min()}, {edge_index.max()}]")
+                        #print(f"  n_nodes from x: {batch_x.shape[1]}")
+                        print(f"  edge_weights: {edge_weight.shape if edge_weight is not None else 'None'}")
+                    continue
                     if self.args.use_amp:
                         with torch.amp.autocast():
                             graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index})()
