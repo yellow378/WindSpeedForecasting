@@ -22,15 +22,9 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
         # 添加图相关属性
         self.edge_index = None
         self.n_nodes = None
+        self.edge_dim = args.edge_dim if hasattr(args, 'edge_dim') else 0
 
     def _build_model(self):
-        # 确保模型参数正确设置
-        if not hasattr(self.args, 'n_nodes') or self.args.n_nodes is None:
-            # 临时加载数据来获取节点数
-            temp_data, _ = self._get_data(flag='train')
-            self.args.n_nodes = len(temp_data.processed_data)
-            self.args.enc_in = list(temp_data.processed_data.values())[0]['features'].shape[1]
-            print(f"Auto-detected: n_nodes={self.args.n_nodes}, enc_in={self.args.enc_in}")
 
         model = self.model_dict[self.args.model].Model(self.args).float()
 
@@ -64,28 +58,29 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
             pbar = tqdm(vali_loader, desc='Validation', leave=False)
             for i, batch in enumerate(pbar):
                 try:
-                    # 修复：使用GraphBatch格式
                     batch = batch.to(self.device)
-                    batch_x = batch.x  # [batch_size, n_nodes, seq_len, n_features]
-                    batch_y = batch.y  # [batch_size, n_nodes, pred_len]
-                    edge_index = batch.edge_index  # [2, num_edges] - 单个图的边索引
+                    batch_x = batch.x      # [batch_size, n_nodes, seq_len, n_features]
+                    batch_y = batch.y      # [batch_size, n_nodes, pred_len]
+                    edge_index = batch.edge_index  # [2, num_edges] - 原始边索引
+                    edge_attr = batch.edge_attr if hasattr(batch, 'edge_attr') else None
                     
-                    # 调试输出
+                    # 调试输出（仅第一个batch）
                     if i == 0:
-                        print(f"\nValidation batch info:")
+                        print(f"\nFirst training batch info:")
                         print(f"  batch_x shape: {batch_x.shape}")
                         print(f"  batch_y shape: {batch_y.shape}")
                         print(f"  edge_index shape: {edge_index.shape}")
                         print(f"  edge_index range: [{edge_index.min()}, {edge_index.max()}]")
-
+                        print(f"  n_nodes from x: {batch_x.shape[1]}")
+                        print(f"  edge_attrs: {edge_attr.shape} ")
                     # GAT模型预测
                     if self.args.use_amp:
                         with torch.amp.autocast():
                             # GAT模型接受GraphData格式
-                            graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index})()
+                            graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index, 'edge_attr': edge_attr})()
                             outputs = self.model(graph_data)
                     else:
-                        graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index})()
+                        graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index, 'edge_attr': edge_attr})()
                         outputs = self.model(graph_data)
 
                     # 处理输出维度
@@ -167,25 +162,27 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
                     batch = batch.to(self.device)
                     batch_x = batch.x      # [batch_size, n_nodes, seq_len, n_features]
                     batch_y = batch.y      # [batch_size, n_nodes, pred_len]
-                    edge_index = batch.edge_index  # [2, num_edges] - 原始边索引
-                    edge_weight = batch.edge_weight if hasattr(batch, 'edge_weight') else None
-                    
+                    edge_index = torch.tensor(batch.edge_index, dtype=torch.long).squeeze(0)  # [2, num_edges] - 原始边索引
+                    print(edge_index)
+                    print(type(edge_index))
+                    edge_attr = torch.tensor(batch.edge_attr, dtype=torch.float).squeeze(0) #[num_edge,dim]
+
                     # 调试输出（仅第一个batch）
                     if epoch == 0 and i == 0:
                         print(f"\nFirst training batch info:")
                         print(f"  batch_x shape: {batch_x.shape}")
                         print(f"  batch_y shape: {batch_y.shape}")
                         print(f"  edge_index shape: {edge_index.shape}")
-                       # print(f"  edge_index range: [{edge_index.min()}, {edge_index.max()}]")
-                        #print(f"  n_nodes from x: {batch_x.shape[1]}")
-                        print(f"  edge_weights: {edge_weight.shape if edge_weight is not None else 'None'}")
-                    continue
+                        print(f"  edge_index range: [{edge_index.min()}, {edge_index.max()}]")
+                        print(f"  n_nodes from x: {batch_x.shape[1]}")
+                        print(f"  edge_attrs: {edge_attr.shape} ")
+                    
                     if self.args.use_amp:
                         with torch.amp.autocast():
-                            graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index})()
+                            graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index, 'edge_attr': edge_attr})()
                             outputs = self.model(graph_data)
                     else:
-                        graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index})()
+                        graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index, 'edge_attr': edge_attr})()
                         outputs = self.model(graph_data)
 
                     # 处理输出维度
@@ -269,9 +266,11 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
             for batch in pbar:
                 try:
                     batch = batch.to(self.device)
-                    batch_x = batch.x
-                    batch_y = batch.y
-                    edge_index = batch.edge_index
+                    batch_x = batch.x      # [batch_size, n_nodes, seq_len, n_features]
+                    batch_y = batch.y      # [batch_size, n_nodes, pred_len]
+                    edge_index = batch.edge_index  # [2, num_edges] - 原始边索引
+                    edge_attr = batch.edge_attr if hasattr(batch, 'edge_attr') else None
+                    
 
                     if self.device.type == 'cuda':
                         torch.cuda.synchronize()
@@ -279,10 +278,10 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
 
                     if self.args.use_amp:
                         with torch.amp.autocast():
-                            graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index})()
+                            graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index, 'edge_attr': edge_attr})()
                             outputs = self.model(graph_data)
                     else:
-                        graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index})()
+                        graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index, 'edge_attr': edge_attr})()
                         outputs = self.model(graph_data)
                     # 处理输出维度
                     outputs = outputs.reshape(self.args.batch_size, -1, self.args.pred_len, 1)

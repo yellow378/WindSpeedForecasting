@@ -9,6 +9,7 @@ import re
 import glob
 warnings.filterwarnings('ignore')
 from torch_geometric.data import Data, Batch
+from tqdm import tqdm
 print("Using PyTorch Geometric")
 
 
@@ -16,8 +17,8 @@ class TimeSeriesGraphDataset(Dataset):
     """
     时间序列图数据集 - 支持PyTorch Geometric或自定义类
     """
-    def __init__(self, data_dir, seq_len=96, pred_len=24, target_col='Wspd', 
-                 scaler_type='standard', edge_file=None, flag='train', shared_scalers=None):
+    def __init__(self, data_dir, seq_len=432, pred_len=36, target_col='Wspd', 
+                 scaler_type='standard', edge_index='index.npy', edge_attr='attr.npy', flag='train', shared_scalers=None):
         """
         初始化数据集
         :param data_dir: 数据文件目录
@@ -25,7 +26,8 @@ class TimeSeriesGraphDataset(Dataset):
         :param pred_len: 预测长度
         :param target_col: 目标列名
         :param scaler_type: 标准化类型 ('standard', 'minmax', None)
-        :param edge_file: 边文件路径
+        :param edge_index: 边index路径
+        :param edge_attr: 边特征文件
         :param flag: 数据集类型 ('train', 'val', 'test')
         :param shared_scalers: 共享的scaler（用于val/test集）
         """
@@ -38,30 +40,24 @@ class TimeSeriesGraphDataset(Dataset):
         self.shared_scalers = shared_scalers
         
         """
-        加载和预处理数据
-        NodeName: 1,2,3,,,
+        加载所有风机数据及预处理
+        NodeName: 0,1,2,3.....
         """
-        print(f"加载所有数据:{data_dir}...")
+        print(f"=================开始加载并处理所有数据:{data_dir}...{self.flag}=================")
         self.data_files = self._get_data_files()
         self.raw_data = self._load_all_data()
-        
-        print("开始处理数据...")
         # 预处理数据， 包含正确处理scaler共享的逻辑
         self.processed_data, self.scalers = self._preprocess_data()
         
-        print("加载表数据...")
-        # 生成或加载边信息
-        if edge_file and os.path.exists(edge_file):
-            self.edge_index, self.edge_weight = self._load_edge_index_and_weight(edge_file)
-        else:
-            raise ValueError("Edge file must be provided and exist.")
+        print("开始加载边数据...")
+        self.edge_index = np.load(edge_index, allow_pickle=True)
+        self.edge_attr = np.load(edge_attr, allow_pickle=True)
 
-        print(f"创建样本索引：{flag}...")
+        print(f"开始创建样本索引：{flag}...")
         # 创建样本索引
         self.samples = self._create_samples()
-        
+
         print(f"{flag.upper()} dataset initialized: {len(self.samples)} samples, {len(self.processed_data)} nodes")
-        
         # 验证数据集的完整性
         self._validate_dataset()
         
@@ -70,7 +66,7 @@ class TimeSeriesGraphDataset(Dataset):
         n_nodes = len(self.processed_data)
         
         # 验证边索引
-        if self.edge_index is not None and self.edge_index.numel() > 0:
+        if self.edge_index is not None:
             max_edge_idx = self.edge_index.max().item()
             if max_edge_idx >= n_nodes:
                 print(f"ERROR: edge_index contains invalid node indices!")
@@ -96,7 +92,7 @@ class TimeSeriesGraphDataset(Dataset):
     def _load_all_data(self):
         """加载所有数据文件"""
         all_data = {}
-        for file_path in self.data_files:
+        for file_path in tqdm(self.data_files, desc="加载风机CSV文件数据..."):
             node_name = os.path.basename(file_path).replace('.csv', '').replace('dated_Turb', '')
             try:
                 df = pd.read_csv(file_path)
@@ -115,11 +111,10 @@ class TimeSeriesGraphDataset(Dataset):
     def _preprocess_data(self):
         processed_data = {}
         scalers = {}
-        
         # 找到所有节点的共同时间范围
         common_time_range = self._get_common_time_range()
         
-        for node_name, df in self.raw_data.items():
+        for node_name, df in tqdm(self.raw_data.items(), desc="处理数据中..."):
             try:
                 # 过滤到共同时间范围
                 if 'date' in df.columns and common_time_range[0] is not None:
@@ -283,38 +278,15 @@ class TimeSeriesGraphDataset(Dataset):
         x = torch.FloatTensor(np.array(node_features))  # [n_nodes, seq_len, n_features]
         y = torch.FloatTensor(np.array(target_values))   # [n_nodes, pred_len]
         
-        # 创建图数据对象 - 根据可用库选择，并加上edge_weight
+        # 创建图数据对象
         graph_data = Data(
             x=x,
             edge_index=self.edge_index,
             y=y,
-            edge_weight=self.edge_weight if hasattr(self, 'edge_weight') else None
+            edge_attr=self.edge_attr
         )
         
         return graph_data
-
-    def _load_edge_index_and_weight(self, file_path):
-        """从文件加载边索引"""
-
-        try:
-            # 假设 file_path 是 .npy 文件，内容为 [n_nodes, n_nodes] 的邻接矩阵（权重矩阵）
-            adj_matrix = np.load(file_path)  # shape: [n_nodes, n_nodes]
-            n_nodes = adj_matrix.shape[0]
-            # 找到所有非零元素（即存在边的地方）
-            src, tgt = np.nonzero(adj_matrix)
-            edge_index = torch.tensor([src, tgt], dtype=torch.long)
-            edge_weight = torch.tensor([src,tgt,adj_matrix[src, tgt]], dtype=torch.float)
-            print(f"Loaded {edge_index.shape[1]} edges from {file_path} (npy)")
-            # 注意：节点编号0对应 node_name 为1 的风机节点
-            return edge_index, edge_weight
-        except Exception as e:
-            print(f"Error loading edge npy file {file_path}: {e}")
-            # 创建默认自环边
-            n_nodes = len(self.processed_data)
-            edge_index = torch.tensor([[i for i in range(n_nodes)], 
-                          [i for i in range(n_nodes)]], dtype=torch.long)
-            edge_weight = torch.ones(n_nodes, dtype=torch.float)
-            return edge_index, edge_weight
     
     def get_scaler(self, node_name):
         """获取特定节点的标准化器"""
@@ -349,7 +321,7 @@ def collate_fn(batch):
 
 
 def create_dataloader(args, flag):
-    """修复：创建数据加载器，正确处理scaler共享"""
+    """创建数据加载器，正确处理scaler共享"""
     shuffle_flag = flag == 'train'  # 只有训练集需要shuffle
     drop_last = True
     batch_size = args.batch_size
@@ -361,18 +333,12 @@ def create_dataloader(args, flag):
         'pred_len': args.pred_len,
         'target_col': args.target,
         'scaler_type': "standard",
+        'edge_index': args.edge_index,
+        'edge_attr': args.edge_attr,
         'flag': flag
     }
-    
-    # 添加边文件路径（如果提供）
-    if hasattr(args, 'edge_file') and args.edge_file:
-        dataset_args['edge_file'] = args.edge_file
-    else:
-        # 自动生成边文件路径
-        edge_file = os.path.join(args.root_path, 'generated_edges.csv')
-        dataset_args['edge_file'] = edge_file
 
-    # 修复：处理scaler共享
+    # 处理scaler共享
     shared_scalers = None
     if flag in ['val', 'test'] and hasattr(args, 'train_scalers'):
         shared_scalers = args.train_scalers
@@ -396,20 +362,3 @@ def create_dataloader(args, flag):
     )
     
     return dataloader, dataset
-
-
-# 使用示例
-def create_all_dataloaders(args):
-    """修复：创建训练、验证和测试数据加载器，确保scaler正确共享"""
-    # 首先创建训练集
-    train_loader, train_dataset = create_dataloader(args, 'train')
-    
-    # 然后创建验证集和测试集（会使用训练集的scaler）
-    val_loader, val_dataset = create_dataloader(args, 'val')
-    test_loader, test_dataset = create_dataloader(args, 'test')
-    
-    return {
-        'train': (train_loader, train_dataset),
-        'val': (val_loader, val_dataset),
-        'test': (test_loader, test_dataset)
-    }

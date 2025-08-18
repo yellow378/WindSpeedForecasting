@@ -52,7 +52,8 @@ if __name__ == "__main__":
         help="root path of the data file",
     )
     parser.add_argument("--data_path", type=str, default="ETTh1.csv", help="data file")
-    parser.add_argument("--edge_file", type=str, default=None, help="edge file for GAT")
+    parser.add_argument("--edge_index",required=True, type=str, default=None, help="edge file for GAT")
+    parser.add_argument("--edge_attr",required=True, type=str, default=None, help="edge attr for GAT")
     parser.add_argument(
         "--features",
         type=str,
@@ -234,7 +235,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--individual", type=int, default=0, help="individual head; True 1 False 0"
     )
-
+    parser.add_argument(
+        "--n_nodes", type=int, default=134, help="number of nodes"
+    )
+    parser.add_argument(
+        "--edge_dim", type=int, default=0, help="edge feature dimension"
+    )
     args = parser.parse_args()
     args.use_gpu = True if torch.cuda.is_available() and args.use_gpu else False
 
