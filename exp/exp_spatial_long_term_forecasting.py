@@ -78,10 +78,10 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
                         with torch.amp.autocast():
                             # GAT模型接受GraphData格式
                             graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index, 'edge_attr': edge_attr})()
-                            outputs = self.model(graph_data)
+                            outputs = self.model(graph_data,device=self.device)
                     else:
                         graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index, 'edge_attr': edge_attr})()
-                        outputs = self.model(graph_data)
+                        outputs = self.model(graph_data,device=self.device)
 
                     # 处理输出维度
                     outputs = outputs.reshape(self.args.batch_size, -1, self.args.pred_len, 1)
@@ -178,10 +178,10 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
                     if self.args.use_amp:
                         with torch.amp.autocast():
                             graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index, 'edge_attr': edge_attr})()
-                            outputs = self.model(graph_data)
+                            outputs = self.model(graph_data,device=self.device)
                     else:
                         graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index, 'edge_attr': edge_attr})()
-                        outputs = self.model(graph_data)
+                        outputs = self.model(graph_data,device=self.device)
 
                     # 处理输出维度
                     outputs = outputs.reshape(self.args.batch_size, -1, self.args.pred_len, 1)
@@ -275,10 +275,10 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
                     if self.args.use_amp:
                         with torch.amp.autocast():
                             graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index, 'edge_attr': edge_attr})()
-                            outputs = self.model(graph_data)
+                            outputs = self.model(graph_data,device=self.device)
                     else:
                         graph_data = type('obj', (object,), {'x': batch_x, 'edge_index': edge_index, 'edge_attr': edge_attr})()
-                        outputs = self.model(graph_data)
+                        outputs = self.model(graph_data,device=self.device)
                     # 处理输出维度
                     outputs = outputs.reshape(self.args.batch_size, -1, self.args.pred_len, 1)
                     batch_y = batch_y.reshape(self.args.batch_size, -1, self.args.pred_len, 1)
