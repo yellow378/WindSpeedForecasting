@@ -61,8 +61,8 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
                     batch = batch.to(self.device)
                     batch_x = batch.x      # [batch_size, n_nodes, seq_len, n_features]
                     batch_y = batch.y      # [batch_size, n_nodes, pred_len]
-                    edge_index = batch.edge_index  # [2, num_edges] - 原始边索引
-                    edge_attr = batch.edge_attr if hasattr(batch, 'edge_attr') else None
+                    edge_index = torch.tensor(batch.edge_index, dtype=torch.long)  # [batch_size, 2, num_edges] - 原始边索引
+                    edge_attr = torch.tensor(batch.edge_attr, dtype=torch.float) #[batch_size, num_edge,dim]
                     
                     # 调试输出（仅第一个batch）
                     if i == 0:
@@ -214,8 +214,6 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
                 except Exception as e:
                     print(f"\nError in training batch {i}:")
                     print(f"  Error: {e}")
-                    print(f"  Batch shapes: x={batch.x.shape}, edge_index={batch.edge_index.shape}")
-                    print(f"  Edge index stats: min={batch.edge_index.min()}, max={batch.edge_index.max()}")
                     raise e
 
             print("Epoch: {} cost time: {}".format(epoch + 1, time.time() - epoch_time))
@@ -266,8 +264,8 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
                     batch = batch.to(self.device)
                     batch_x = batch.x      # [batch_size, n_nodes, seq_len, n_features]
                     batch_y = batch.y      # [batch_size, n_nodes, pred_len]
-                    edge_index = batch.edge_index  # [2, num_edges] - 原始边索引
-                    edge_attr = batch.edge_attr if hasattr(batch, 'edge_attr') else None
+                    edge_index = torch.tensor(batch.edge_index, dtype=torch.long)  # [batch_size, 2, num_edges] - 原始边索引
+                    edge_attr = torch.tensor(batch.edge_attr, dtype=torch.float) #[batch_size, num_edge,dim]
                     
 
                     if self.device.type == 'cuda':
