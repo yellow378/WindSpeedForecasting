@@ -178,147 +178,135 @@ class GAT(torch.nn.Module):
         etmp_idx, itmp_idx = 2, 3  # 环境温度、内部温度
         ndir_idx = 4  # 机舱方向
         patv_idx = 9   # 有功功率（假设是第10列，索引9）
+
+        x = x.to(device)
+        edge_index = edge_index.to(device)
+        static_edge_attr = static_edge_attr.to(device)
         
         # 取最后一个时间步的特征用于计算动态边特征
-        current_features = x[:, -1, :]  # [batch_size*n_nodes, feature_dim]
-
-        # 为每个批次计算动态边特征
-        batch_dynamic_features = []
-        for b in range(batch_size):
-            # 获取当前批次的节点特征
-            batch_start = b * n_nodes
-            batch_end = (b + 1) * n_nodes
-            batch_features = current_features[batch_start:batch_end]  # [n_nodes, feature_dim]
-
-                    
-            # 获取边的源节点和目标节点索引（针对当前批次）
-            source_idx = edge_index[b,0]  # [num_edges]
-            target_idx = edge_index[b,1]  # [num_edges]
-            
-            # 提取源节点和目标节点的特征
-            source_features = batch_features[source_idx]  # [num_edges, feature_dim]
-            target_features = batch_features[target_idx]  # [num_edges, feature_dim]
-            
-            dynamic_features = []
-            
-            # 1. 风向相关的动态特征
-            source_wdir = source_features[:, wdir_idx]
-            target_wdir = target_features[:, wdir_idx]
-            
-            # 风向差异（考虑角度的周期性）
-            wdir_diff = torch.abs(source_wdir - target_wdir)
-            wdir_diff = torch.min(wdir_diff, 360 - wdir_diff)
-            wdir_diff_norm = wdir_diff / 180.0
-            dynamic_features.append(wdir_diff_norm.unsqueeze(1))
-            
-            # 风向一致性（cos相似度）
-            source_wdir_rad = torch.deg2rad(source_wdir)
-            target_wdir_rad = torch.deg2rad(target_wdir)
-            wdir_consistency = torch.cos(source_wdir_rad - target_wdir_rad)
-            dynamic_features.append(wdir_consistency.unsqueeze(1))
-           
-            
-            # 2. 风速相关的动态特征
-            source_wspd = source_features[:, wspd_idx]
-            target_wspd = target_features[:, wspd_idx]
-            
-            # 风速差异
-            wspd_diff = torch.abs(source_wspd - target_wspd)
-            wspd_diff_norm = torch.clamp(wspd_diff / 25.0, 0, 1)
-            dynamic_features.append(wspd_diff_norm.unsqueeze(1))
-            
-            # 风速比率
-            wspd_ratio = torch.clamp(torch.min(source_wspd, target_wspd) / 
-                            (torch.max(source_wspd, target_wspd) + 1e-5), 0, 1)
-            dynamic_features.append(wspd_ratio.unsqueeze(1))
-            
-            # 平均风速等级
-            avg_wspd = (source_wspd + target_wspd) / 2
-            wspd_level = torch.clamp(avg_wspd / 25.0, 0, 1)
-            dynamic_features.append(wspd_level.unsqueeze(1))
-            
-            # 从静态特征中提取距离和方向信息
-            batch_static_edge_attr = static_edge_attr[b]  # [num_edges, 21] 获取当前批次的静态边特征
-            euclidean_dist = batch_static_edge_attr[:, 0]  # [num_edges]
-            bearing_angle = batch_static_edge_attr[:, 4]   # [num_edges]
-
-            # 计算尾流影响强度
-            source_to_target_angle = bearing_angle
-            wake_alignment = torch.cos(torch.deg2rad(source_wdir - source_to_target_angle))
-            wake_alignment = torch.clamp(wake_alignment, 0, 1)
-            
-            # 距离衰减因子
-            distance_decay = torch.exp(-euclidean_dist / 500.0)
-            
-            # 综合尾流强度
-            wake_effect = wake_alignment * distance_decay * wspd_level.squeeze()
-            dynamic_features.append(wake_effect.unsqueeze(1))
-            
-            source_etmp = source_features[:, etmp_idx]
-            target_etmp = target_features[:, etmp_idx]
-            
-            temp_diff = torch.abs(source_etmp - target_etmp)
-            temp_diff_norm = torch.clamp(temp_diff / 50.0, 0, 1)
-            dynamic_features.append(temp_diff_norm.unsqueeze(1))
-            
-            # 5. 功率相关特征
-            source_patv = source_features[:, patv_idx]
-            target_patv = target_features[:, patv_idx]
-            
-            power_diff = torch.abs(source_patv - target_patv)
-            power_diff_norm = torch.clamp(power_diff / 2000.0, 0, 1)
-            dynamic_features.append(power_diff_norm.unsqueeze(1))
-            
-            power_correlation = torch.clamp(torch.min(source_patv, target_patv) / 
-                                    (torch.max(source_patv, target_patv) + 1e-5), 0, 1)
-            dynamic_features.append(power_correlation.unsqueeze(1))
-            
-            
-            source_ndir = source_features[:, ndir_idx]
-            target_ndir = target_features[:, ndir_idx]
-            
-            ndir_diff = torch.abs(source_ndir - target_ndir)
-            ndir_diff = torch.min(ndir_diff, 360 - ndir_diff)
-            ndir_diff_norm = ndir_diff / 180.0
-            dynamic_features.append(ndir_diff_norm.unsqueeze(1))
-            
-            source_ndir_wind_align = torch.cos(torch.deg2rad(source_ndir - source_wdir))
-            target_ndir_wind_align = torch.cos(torch.deg2rad(target_ndir - target_wdir))
-            avg_alignment = (source_ndir_wind_align + target_ndir_wind_align) / 2
-            dynamic_features.append(avg_alignment.unsqueeze(1))
-            
-            # 7. 时序稳定性特征（基于近期变化趋势）
-            # 获取当前批次的历史风速数据
-            batch_recent_wspd = x[batch_start:batch_end, -3:, wspd_idx]  # [n_nodes, 3]
-            wspd_trend = batch_recent_wspd[:, -1] - batch_recent_wspd[:, 0]
-            
-            source_trend = wspd_trend[source_idx]
-            target_trend = wspd_trend[target_idx]
-            
-            # 创建与source_trend相同设备和dtype的tensor
-            ones_tensor = torch.ones_like(source_trend)
-
-            trend_consistency = torch.cos(torch.atan2(source_trend, ones_tensor) - torch.atan2(target_trend, ones_tensor))
-            dynamic_features.append(trend_consistency.unsqueeze(1))
-            
-            trend_strength_diff = torch.abs(torch.abs(source_trend) - torch.abs(target_trend))
-            trend_strength_diff_norm = torch.clamp(trend_strength_diff / 10.0, 0, 1)
-            dynamic_features.append(trend_strength_diff_norm.unsqueeze(1))
-            
-            # 合并当前批次的动态特征
-            batch_dynamic_edge_attr = torch.cat(dynamic_features, dim=1)  # [num_edges, dynamic_dim]
-            batch_dynamic_features.append(batch_dynamic_edge_attr)
+        current_features = x[:, -1, :].view(batch_size, n_nodes, -1)   # [batch_size, n_nodes, feature_dim]
+        source_indices = edge_index[:,0]  # [batch_size,num_edges]
+        target_indices = edge_index[:,1]  # [batch_size, num_edges]
+        batch_indices = torch.arange(batch_size, device=device).view(-1, 1).expand(-1, source_indices.shape[1])  # [batch_size, num_edges]
         
-        batch_static_features = []
-        for b in range(batch_size):
-            batch_static_features.append(static_edge_attr[b])  # [num_edges, 21]
 
-        all_static_features = torch.stack(batch_static_features, dim=0)  # [batch_size, num_edges, 21]
+        # 批量索引操作
+        source_features = current_features[batch_indices, source_indices]  # [batch_size, num_edges, feature_dim]
+        target_features = current_features[batch_indices, target_indices]  # [batch_size, num_edges, feature_dim]
+        
+        dynamic_features = []
+        
+        # 1. 风向相关的动态特征
+        source_wdir = source_features[:, :, wdir_idx]
+        target_wdir = target_features[:, :, wdir_idx]
 
-        # 合并所有批次的动态特征
-        all_dynamic_features = torch.stack(batch_dynamic_features, dim=0)  # [batch_size, num_edges, dynamic_dim]
-        # 结合静态和动态边特征
-        combined_edge_attr = torch.cat([all_static_features, all_dynamic_features], dim=2)
+        # 风向差异（考虑角度的周期性）
+        wdir_diff = torch.abs(source_wdir - target_wdir)
+        wdir_diff = torch.min(wdir_diff, 360 - wdir_diff)
+        wdir_diff_norm = wdir_diff / 180.0
+        dynamic_features.append(wdir_diff_norm. unsqueeze(-1))
+        
+        # 风向一致性（cos相似度）
+        source_wdir_rad = torch.deg2rad(source_wdir)
+        target_wdir_rad = torch.deg2rad(target_wdir)
+        wdir_consistency = torch.cos(source_wdir_rad - target_wdir_rad)
+        dynamic_features.append(wdir_consistency. unsqueeze(-1))
+        
+        
+        # 2. 风速相关的动态特征
+        source_wspd = source_features[:, :, wspd_idx]
+        target_wspd = target_features[:, :, wspd_idx]
+        
+        # 风速差异
+        wspd_diff = torch.abs(source_wspd - target_wspd)
+        wspd_diff_norm = torch.clamp(wspd_diff / 25.0, 0, 1)
+        dynamic_features.append(wspd_diff_norm. unsqueeze(-1))
+        
+        # 风速比率
+        wspd_ratio = torch.clamp(torch.min(source_wspd, target_wspd) / 
+                        (torch.max(source_wspd, target_wspd) + 1e-5), 0, 1)
+        dynamic_features.append(wspd_ratio. unsqueeze(-1))
+        
+        # 平均风速等级
+        avg_wspd = (source_wspd + target_wspd) / 2
+        wspd_level = torch.clamp(avg_wspd / 25.0, 0, 1)
+        dynamic_features.append(wspd_level. unsqueeze(-1))
+        
+        # 从静态特征中提取距离和方向信息
+        euclidean_dist = static_edge_attr[:, :, 0]  # [num_edges]
+        bearing_angle = static_edge_attr[:, :, 4]   # [num_edges]
+
+        # 计算尾流影响强度
+        source_to_target_angle = bearing_angle
+        wake_alignment = torch.cos(torch.deg2rad(source_wdir - source_to_target_angle))
+        wake_alignment = torch.clamp(wake_alignment, 0, 1)
+        
+        # 距离衰减因子
+        distance_decay = torch.exp(-euclidean_dist / 500.0)
+        
+        # 综合尾流强度
+        wake_effect = wake_alignment * distance_decay * wspd_level.squeeze()
+        dynamic_features.append(wake_effect. unsqueeze(-1))
+        
+        source_etmp = source_features[:, :, etmp_idx]
+        target_etmp = target_features[:, :, etmp_idx]
+        
+        temp_diff = torch.abs(source_etmp - target_etmp)
+        temp_diff_norm = torch.clamp(temp_diff / 50.0, 0, 1)
+        dynamic_features.append(temp_diff_norm. unsqueeze(-1))
+        
+        # 5. 功率相关特征
+        source_patv = source_features[:, :, patv_idx]
+        target_patv = target_features[:, :, patv_idx]
+        
+        power_diff = torch.abs(source_patv - target_patv)
+        power_diff_norm = torch.clamp(power_diff / 2000.0, 0, 1)
+        dynamic_features.append(power_diff_norm. unsqueeze(-1))
+        
+        power_correlation = torch.clamp(torch.min(source_patv, target_patv) / 
+                                (torch.max(source_patv, target_patv) + 1e-5), 0, 1)
+        dynamic_features.append(power_correlation. unsqueeze(-1))
+        
+        
+        source_ndir = source_features[:, :, ndir_idx]
+        target_ndir = target_features[:, :, ndir_idx]
+        
+        ndir_diff = torch.abs(source_ndir - target_ndir)
+        ndir_diff = torch.min(ndir_diff, 360 - ndir_diff)
+        ndir_diff_norm = ndir_diff / 180.0
+        dynamic_features.append(ndir_diff_norm. unsqueeze(-1))
+        
+        source_ndir_wind_align = torch.cos(torch.deg2rad(source_ndir - source_wdir))
+        target_ndir_wind_align = torch.cos(torch.deg2rad(target_ndir - target_wdir))
+        avg_alignment = (source_ndir_wind_align + target_ndir_wind_align) / 2
+        dynamic_features.append(avg_alignment. unsqueeze(-1))
+        
+        # 7. 时序稳定性特征（基于近期变化趋势）
+        # 获取当前批次的历史风速数据
+        x_reshaped = x.view(batch_size, n_nodes, -1, x.shape[-1]) 
+        recent_wspd = x_reshaped[:, :, -3:, wspd_idx]  # [batch_size, n_nodes, 3]
+        wspd_trend = recent_wspd[:, :, -1] - recent_wspd[:, :, 0]  # [batch_size, n_nodes]
+        
+        source_trend = wspd_trend[batch_indices, source_indices]  # [batch_size, num_edges]
+        target_trend = wspd_trend[batch_indices, target_indices]  # [batch_size, num_edges]
+        
+        
+        # 创建与source_trend相同设备和dtype的tensor
+        ones_tensor = torch.ones_like(source_trend)
+
+        trend_consistency = torch.cos(torch.atan2(source_trend, ones_tensor) - torch.atan2(target_trend, ones_tensor))
+        dynamic_features.append(trend_consistency. unsqueeze(-1))
+        
+        trend_strength_diff = torch.abs(torch.abs(source_trend) - torch.abs(target_trend))
+        trend_strength_diff_norm = torch.clamp(trend_strength_diff / 10.0, 0, 1)
+        dynamic_features.append(trend_strength_diff_norm.unsqueeze(-1))
+        
+        # 合并动态特征
+        all_dynamic_features = torch.cat(dynamic_features, dim=-1)  # [batch_size, num_edges, dynamic_dim]
+    
+        # 合并静态和动态特征
+        combined_edge_attr = torch.cat([static_edge_attr, all_dynamic_features], dim=-1)
+        
         return combined_edge_attr
 
 
