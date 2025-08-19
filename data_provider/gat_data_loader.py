@@ -64,6 +64,7 @@ class TimeSeriesGraphDataset(Dataset):
     def _validate_dataset(self):
         """验证数据集的完整性"""
         n_nodes = len(self.processed_data)
+        self.n_nodes = n_nodes
         
         # 验证边索引
         if self.edge_index is not None:
@@ -277,16 +278,183 @@ class TimeSeriesGraphDataset(Dataset):
         # 转换为tensor
         x = torch.FloatTensor(np.array(node_features))  # [n_nodes, seq_len, n_features]
         y = torch.FloatTensor(np.array(target_values))   # [n_nodes, pred_len]
+        edge_index = torch.LongTensor(np.array(self.edge_index))
+        edge_attr = torch.FloatTensor(np.array(self.compute_dynamic_edge_features(x,edge_index,self.edge_attr)))
         
         # 创建图数据对象
         graph_data = Data(
             x=x,
-            edge_index=self.edge_index,
+            edge_index=edge_index,
             y=y,
-            edge_attr=self.edge_attr
+            edge_attr=edge_attr
         )
         
         return graph_data
+
+    def compute_dynamic_edge_features(self, x, edge_index, static_edge_attr):
+        """
+        batch_size_nnodes, seq_len, feature_dim = x.shape
+        num_edges = edge_index.shape[1]
+        
+        # 根据数据集的实际特征列确定索引
+        # 从TimeSeriesGraphDataset可以看出特征列除了date外包含: Wspd, Wdir, Etmp, Itmp, Ndir, Pab1, Pab2, Pab3, Prtv, Patv
+        # 由于date列在预处理时被排除，所以特征顺序为: [Wspd, Wdir, Etmp, Itmp, Ndir, Pab1, Pab2, Pab3, Prtv, Patv]
+        动态边特征说明（总计13维）:
+        1. wdir_diff_norm: 风向差异归一化
+        2. wdir_consistency: 风向一致性（cos相似度）
+        3. wspd_diff_norm: 风速差异归一化  
+        4. wspd_ratio: 风速比率
+        5. wspd_level: 平均风速等级
+        6. wake_effect: 尾流效应强度
+        7. temp_diff_norm: 温度差异归一化
+        8. power_diff_norm: 功率差异归一化
+        9. power_correlation: 功率相关性
+        10. ndir_diff_norm: 机舱方向差异
+        11. ndir_wind_align: 机舱方向与风向一致性
+        12. trend_consistency: 风速变化趋势一致性（seq_len>=3时）
+        13. trend_strength_diff: 趋势强度差异（seq_len>=3时）
+
+        特征优势:
+        - 考虑风电场特有的尾流效应
+        - 结合风向、风速的时变特性
+        - 包含设备状态（机舱方向、功率）的动态交互
+        - 引入时序趋势分析，捕获短期变化模式
+        - 与静态图特征互补，提供完整的时空建模能力
+        """
+        # x [n_nodes, seq_len, feature_dim]
+        # edge_index [2, num_edges]
+        # static_edge_attr [num_edges, static_edge_dim]
+        static_edge_attr = torch.tensor(static_edge_attr)
+        n_nodes = self.n_nodes
+
+        # 使用默认索引（基于常见的风电数据格式）
+        wspd_idx, wdir_idx = 0, 1  # 风速、风向
+        etmp_idx, itmp_idx = 2, 3  # 环境温度、内部温度
+        ndir_idx = 4  # 机舱方向
+        patv_idx = 9   # 有功功率（假设是第10列，索引9）
+        
+        # 取最后一个时间步的特征用于计算动态边特征
+        current_features = x[:, -1, :].view(n_nodes, -1)   # [n_nodes, feature_dim]
+        source_indices = edge_index[0]  # [batch_size,num_edges]
+        target_indices = edge_index[1]  # [batch_size, num_edges]
+        
+
+        # 批量索引操作
+        source_features = current_features[source_indices]  # [num_edges, feature_dim]
+        target_features = current_features[target_indices]  # [num_edges, feature_dim]
+
+        dynamic_features = []
+        
+        # 1. 风向相关的动态特征
+        source_wdir = source_features[:,  wdir_idx]
+        target_wdir = target_features[:,  wdir_idx]
+
+        # 风向差异（考虑角度的周期性）
+        wdir_diff = torch.abs(source_wdir - target_wdir)
+        wdir_diff = torch.min(wdir_diff, 360 - wdir_diff)
+        wdir_diff_norm = wdir_diff / 180.0
+        dynamic_features.append(wdir_diff_norm. unsqueeze(-1))
+        
+        # 风向一致性（cos相似度）
+        source_wdir_rad = torch.deg2rad(source_wdir)
+        target_wdir_rad = torch.deg2rad(target_wdir)
+        wdir_consistency = torch.cos(source_wdir_rad - target_wdir_rad)
+        dynamic_features.append(wdir_consistency. unsqueeze(-1))
+        
+        
+        # 2. 风速相关的动态特征
+        source_wspd = source_features[:,  wspd_idx]
+        target_wspd = target_features[:,  wspd_idx]
+
+        # 风速差异
+        wspd_diff = torch.abs(source_wspd - target_wspd)
+        wspd_diff_norm = torch.clamp(wspd_diff / 25.0, 0, 1)
+        dynamic_features.append(wspd_diff_norm. unsqueeze(-1))
+        
+        # 风速比率
+        wspd_ratio = torch.clamp(torch.min(source_wspd, target_wspd) / 
+                        (torch.max(source_wspd, target_wspd) + 1e-5), 0, 1)
+        dynamic_features.append(wspd_ratio. unsqueeze(-1))
+        
+        # 平均风速等级
+        avg_wspd = (source_wspd + target_wspd) / 2
+        wspd_level = torch.clamp(avg_wspd / 25.0, 0, 1)
+        dynamic_features.append(wspd_level. unsqueeze(-1))
+        
+        # 从静态特征中提取距离和方向信息
+        euclidean_dist = static_edge_attr[:,  0]  # [num_edges]
+        bearing_angle = static_edge_attr[:,  4]   # [num_edges]
+
+        # 计算尾流影响强度
+        source_to_target_angle = bearing_angle
+        wake_alignment = torch.cos(torch.deg2rad(source_wdir - source_to_target_angle))
+        wake_alignment = torch.clamp(wake_alignment, 0, 1)
+        
+        # 距离衰减因子
+        distance_decay = torch.exp(-euclidean_dist / 500.0)
+        
+        # 综合尾流强度
+        wake_effect = wake_alignment * distance_decay * wspd_level.squeeze()
+        dynamic_features.append(wake_effect. unsqueeze(-1))
+        
+        source_etmp = source_features[:,  etmp_idx]
+        target_etmp = target_features[:,  etmp_idx]
+        
+        temp_diff = torch.abs(source_etmp - target_etmp)
+        temp_diff_norm = torch.clamp(temp_diff / 50.0, 0, 1)
+        dynamic_features.append(temp_diff_norm. unsqueeze(-1))
+        
+        # 5. 功率相关特征
+        source_patv = source_features[:,  patv_idx]
+        target_patv = target_features[:,  patv_idx]
+        
+        power_diff = torch.abs(source_patv - target_patv)
+        power_diff_norm = torch.clamp(power_diff / 2000.0, 0, 1)
+        dynamic_features.append(power_diff_norm. unsqueeze(-1))
+        
+        power_correlation = torch.clamp(torch.min(source_patv, target_patv) / 
+                                (torch.max(source_patv, target_patv) + 1e-5), 0, 1)
+        dynamic_features.append(power_correlation. unsqueeze(-1))
+        
+        
+        source_ndir = source_features[:, ndir_idx]
+        target_ndir = target_features[:, ndir_idx]
+        
+        ndir_diff = torch.abs(source_ndir - target_ndir)
+        ndir_diff = torch.min(ndir_diff, 360 - ndir_diff)
+        ndir_diff_norm = ndir_diff / 180.0
+        dynamic_features.append(ndir_diff_norm. unsqueeze(-1))
+        
+        source_ndir_wind_align = torch.cos(torch.deg2rad(source_ndir - source_wdir))
+        target_ndir_wind_align = torch.cos(torch.deg2rad(target_ndir - target_wdir))
+        avg_alignment = (source_ndir_wind_align + target_ndir_wind_align) / 2
+        dynamic_features.append(avg_alignment. unsqueeze(-1))
+        
+        # 7. 时序稳定性特征（基于近期变化趋势）
+        # 获取当前批次的历史风速数据
+        recent_wspd = x[:, -3:, wspd_idx]  # [n_nodes, 3]
+        wspd_trend = recent_wspd[:, -1] - recent_wspd[:, 0]  # [n_nodes]
+
+        source_trend = wspd_trend[source_indices]  # [num_edges]
+        target_trend = wspd_trend[target_indices]  # [num_edges]
+
+
+        # 创建与source_trend相同设备和dtype的tensor
+        ones_tensor = torch.ones_like(source_trend)
+
+        trend_consistency = torch.cos(torch.atan2(source_trend, ones_tensor) - torch.atan2(target_trend, ones_tensor))
+        dynamic_features.append(trend_consistency. unsqueeze(-1))
+        
+        trend_strength_diff = torch.abs(torch.abs(source_trend) - torch.abs(target_trend))
+        trend_strength_diff_norm = torch.clamp(trend_strength_diff / 10.0, 0, 1)
+        dynamic_features.append(trend_strength_diff_norm.unsqueeze(-1))
+        
+        # 合并动态特征
+        all_dynamic_features = torch.cat(dynamic_features, dim=-1)  # [num_edges, dynamic_dim]
+
+        # 合并静态和动态特征
+        combined_edge_attr = torch.cat([static_edge_attr, all_dynamic_features], dim=-1)
+        return combined_edge_attr
     
     def get_scaler(self, node_name):
         """获取特定节点的标准化器"""
