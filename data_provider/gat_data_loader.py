@@ -141,7 +141,7 @@ class TimeSeriesGraphDataset(Dataset):
                     scaler = MinMaxScaler()
                 else:
                     scaler = None
-                
+
                 if scaler is not None:
                     if self.flag == 'train' or self.shared_scalers is None:
                         # 训练集：拟合并转换

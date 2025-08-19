@@ -239,7 +239,10 @@ if __name__ == "__main__":
         "--n_nodes", type=int, default=134, help="number of nodes"
     )
     parser.add_argument(
-        "--edge_dim", type=int, default=0, help="edge feature dimension"
+        "--static_edge_dim", type=int, default=0, help="edge feature dimension"
+    )
+    parser.add_argument(
+        "--use_edge_features", action="store_true", help="use edge features"
     )
     args = parser.parse_args()
     args.use_gpu = True if torch.cuda.is_available() and args.use_gpu else False

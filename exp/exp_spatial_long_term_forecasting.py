@@ -162,10 +162,8 @@ class Exp_Spatial_Long_Term_Forecast(Exp_Basic):
                     batch = batch.to(self.device)
                     batch_x = batch.x      # [batch_size, n_nodes, seq_len, n_features]
                     batch_y = batch.y      # [batch_size, n_nodes, pred_len]
-                    edge_index = torch.tensor(batch.edge_index, dtype=torch.long).squeeze(0)  # [2, num_edges] - 原始边索引
-                    print(edge_index)
-                    print(type(edge_index))
-                    edge_attr = torch.tensor(batch.edge_attr, dtype=torch.float).squeeze(0) #[num_edge,dim]
+                    edge_index = torch.tensor(batch.edge_index, dtype=torch.long)  # [batch_size, 2, num_edges] - 原始边索引
+                    edge_attr = torch.tensor(batch.edge_attr, dtype=torch.float) #[batch_size, num_edge,dim]
 
                     # 调试输出（仅第一个batch）
                     if epoch == 0 and i == 0:
