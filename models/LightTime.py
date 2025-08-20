@@ -124,8 +124,8 @@ class Model(nn.Module):
     def encoder(self, x_enc):
         # Step1: 区分External和Endogenous变量
         # [batch_size, enc_in, seq_len]
-        x_en = x_enc[:, :, -1:]
-        x_ex = x_enc[:, :, 0:-1]
+        x_en = x_enc[:, :, 0:1]
+        x_ex = x_enc[:, :, 1:]
 
         # Step2: 处理External变量
         # [batch_size,self.d_model*n_vars, patch_num]
