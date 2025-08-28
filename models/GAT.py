@@ -23,6 +23,8 @@ class GAT(torch.nn.Module):
         self.dynamic_edge_dim = 13 if configs.seq_len >= 3 else 11
         self.total_edge_dim = self.static_edge_dim + self.dynamic_edge_dim if self.static_edge_dim is not None else self.dynamic_edge_dim
         self.use_edge_features = getattr(configs, 'use_edge_features', True)
+        if self.use_edge_features is None or self.use_edge_features is False:
+            self.total_edge_dim = 0
         # 初始化LightTime模型
         self.lightTime = LightTime.Model(configs).float()
         
@@ -30,22 +32,27 @@ class GAT(torch.nn.Module):
         self.in_channels = self.lightTime.n_heads * self.lightTime.d_model
 
         # 边特征预处理层
-        self.edge_preprocessing = torch.nn.Sequential(
-            torch.nn.Linear(self.total_edge_dim, self.total_edge_dim),
-            torch.nn.ReLU(),
-            torch.nn.Dropout(0.1),
-            torch.nn.Linear(self.total_edge_dim, self.total_edge_dim // 2)
-        )
+        if self.use_edge_features and self.total_edge_dim > 0:
+            self.edge_preprocessing = torch.nn.Sequential(
+                torch.nn.Linear(self.total_edge_dim, self.total_edge_dim),
+                torch.nn.ReLU(),
+                torch.nn.Dropout(0.1),
+                torch.nn.Linear(self.total_edge_dim, self.total_edge_dim // 2)
+            )
         
         # 使用原生GATConv，支持多维边特征
+        print(f"in_channels:{self.in_channels}, out_channels:{self.in_channels}, heads:{self.heads}")
         self.gat = GATConv(
             in_channels=self.in_channels, 
             out_channels=self.in_channels,
             heads=self.heads, 
             dropout=0, 
             concat=False,
-            edge_dim=self.total_edge_dim // 2  # 指定边特征维度
+            #edge_dim=self.total_edge_dim // 2  # 指定边特征维度
         )
+
+        print("parameters number of GATConv:")
+        print(sum(p.numel() for p in self.gat.parameters()))
         
         # 额外的线性层用于GAT后的处理
         self.gat_norm = torch.nn.LayerNorm(self.in_channels)
