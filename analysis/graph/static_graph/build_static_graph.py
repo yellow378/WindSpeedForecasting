@@ -179,13 +179,18 @@ class EdgeFeatureGraphBuilder:
                 zero_variance_turbines.append(i)
         
         # 计算相关性矩阵
+        print(self.wind_speed_data.shape)
+
+        # 计算一阶差分
+        diff_data = np.diff(self.wind_speed_data, axis=1)
+        print(f"差分数据形状: {diff_data.shape}")
+
+        # 计算相关性
         if method == "pearson":
-            correlation_matrix = np.corrcoef(self.wind_speed_data)
+            correlation_matrix = np.corrcoef(diff_data)
         elif method == "spearman":
-            from scipy.stats import spearmanr
-            correlation_matrix, _ = spearmanr(self.wind_speed_data, axis=1)
-        else:
-            raise ValueError(f"不支持的相关性计算方法: {method}")
+            ranked_data = np.apply_along_axis(rankdata, 1, diff_data)
+            correlation_matrix = np.corrcoef(ranked_data)
         
         # 处理NaN值
         nan_mask = np.isnan(correlation_matrix)
@@ -262,7 +267,7 @@ class EdgeFeatureGraphBuilder:
         np.fill_diagonal(display_matrix, 1.0)
         
         # 绘制热力图
-        im = plt.imshow(display_matrix, cmap='RdBu_r', vmin=-1, vmax=1, aspect='auto')
+        im = plt.imshow(display_matrix, cmap='RdBu_r', vmin=0, vmax=1, aspect='auto')
         
         # 标记问题风机
         if hasattr(self, 'problematic_turbines') and self.problematic_turbines:
@@ -293,8 +298,8 @@ class EdgeFeatureGraphBuilder:
         
         features = {}
         
-        # 1. 欧几里得距离
-        features['euclidean_distance'] = self.distance_matrix.copy()
+        # # 1. 欧几里得距离
+        # features['euclidean_distance'] = self.distance_matrix.copy()
         
         # 2. 标准化距离 (0-1)
         max_dist = np.max(self.distance_matrix)
@@ -306,9 +311,9 @@ class EdgeFeatureGraphBuilder:
         inv_dist[mask] = 1.0 / self.distance_matrix[mask]
         features['inverse_distance'] = inv_dist
         
-        # 4. 高斯距离核
-        sigma = np.mean(self.distance_matrix[self.distance_matrix > 0]) / 3
-        features['gaussian_distance'] = np.exp(-(self.distance_matrix ** 2) / (2 * sigma ** 2))
+        # # 4. 高斯距离核
+        # sigma = np.mean(self.distance_matrix[self.distance_matrix > 0]) / 3
+        # features['gaussian_distance'] = np.exp(-(self.distance_matrix ** 2) / (2 * sigma ** 2))
         
         # 5. 相对方位角 (弧度)
         angles = np.zeros((self.num_nodes, self.num_nodes))
@@ -324,17 +329,17 @@ class EdgeFeatureGraphBuilder:
         features['bearing_sin'] = np.sin(angles)
         features['bearing_cos'] = np.cos(angles)
         
-        # 7. 坐标差值特征
-        coord_diff_x = np.zeros((self.num_nodes, self.num_nodes))
-        coord_diff_y = np.zeros((self.num_nodes, self.num_nodes))
+        # # 7. 坐标差值特征
+        # coord_diff_x = np.zeros((self.num_nodes, self.num_nodes))
+        # coord_diff_y = np.zeros((self.num_nodes, self.num_nodes))
         
-        for i in range(self.num_nodes):
-            for j in range(self.num_nodes):
-                coord_diff_x[i, j] = self.coords[j, 0] - self.coords[i, 0]
-                coord_diff_y[i, j] = self.coords[j, 1] - self.coords[i, 1]
+        # for i in range(self.num_nodes):
+        #     for j in range(self.num_nodes):
+        #         coord_diff_x[i, j] = self.coords[j, 0] - self.coords[i, 0]
+        #         coord_diff_y[i, j] = self.coords[j, 1] - self.coords[i, 1]
         
-        features['coord_diff_x'] = coord_diff_x
-        features['coord_diff_y'] = coord_diff_y
+        # features['coord_diff_x'] = coord_diff_x
+        # features['coord_diff_y'] = coord_diff_y
         
         return features
     
@@ -351,25 +356,25 @@ class EdgeFeatureGraphBuilder:
         # 1. 原始相关性
         features['pearson_correlation'] = self.correlation_matrix.copy()
         
-        # 2. 绝对相关性
-        features['abs_correlation'] = np.abs(self.correlation_matrix)
+        # # 2. 绝对相关性
+        # features['abs_correlation'] = np.abs(self.correlation_matrix)
         
         # 3. 相关性平方 (强调强相关)
         features['correlation_squared'] = self.correlation_matrix ** 2
         
-        # 4. 相关性符号 (正相关=1, 负相关=-1)
-        corr_sign = np.zeros_like(self.correlation_matrix)
-        corr_sign[self.correlation_matrix > 0] = 1
-        corr_sign[self.correlation_matrix < 0] = -1
-        features['correlation_sign'] = corr_sign
+        # # 4. 相关性符号 (正相关=1, 负相关=-1)
+        # corr_sign = np.zeros_like(self.correlation_matrix)
+        # corr_sign[self.correlation_matrix > 0] = 1
+        # corr_sign[self.correlation_matrix < 0] = -1
+        # features['correlation_sign'] = corr_sign
         
-        # 5. 相关性等级 (分为强、中、弱相关)
-        corr_level = np.zeros_like(self.correlation_matrix)
-        abs_corr = np.abs(self.correlation_matrix)
-        corr_level[abs_corr > 0.7] = 3  # 强相关
-        corr_level[(abs_corr > 0.4) & (abs_corr <= 0.7)] = 2  # 中等相关
-        corr_level[(abs_corr > 0.2) & (abs_corr <= 0.4)] = 1  # 弱相关
-        features['correlation_level'] = corr_level
+        # # 5. 相关性等级 (分为强、中、弱相关)
+        # corr_level = np.zeros_like(self.correlation_matrix)
+        # abs_corr = np.abs(self.correlation_matrix)
+        # corr_level[abs_corr > 0.7] = 3  # 强相关
+        # corr_level[(abs_corr > 0.4) & (abs_corr <= 0.7)] = 2  # 中等相关
+        # corr_level[(abs_corr > 0.2) & (abs_corr <= 0.4)] = 1  # 弱相关
+        # features['correlation_level'] = corr_level
         
         return features
     
@@ -698,7 +703,7 @@ def create_comprehensive_edge_feature_graph(
             wind_speed_data = builder.load_wind_speed_data()
             
             # 计算相关性矩阵
-            correlation_matrix = builder.compute_correlation_matrix(method="pearson")
+            correlation_matrix = builder.compute_correlation_matrix(method="pearson",use_abs=False)
             
             # 可视化相关性矩阵
             builder.visualize_correlation_matrix()
@@ -776,7 +781,6 @@ if __name__ == "__main__":
     # 示例：构建KNN图的边特征
     builder, G, edge_index, edge_attr, feature_names = create_comprehensive_edge_feature_graph(
         location_file="sdwpf_baidukddcup2022_turb_location.CSV",
-        correlation_matrix_path="computed_correlation_matrix.npy",  # 如果有的话
         graph_type='knn',
         k=5,
         wind_speed_files_pattern="dated_Turb*.csv",  # 风速数据文件模式
