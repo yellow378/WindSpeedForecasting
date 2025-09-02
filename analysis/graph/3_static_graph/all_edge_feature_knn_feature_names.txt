@@ -1,0 +1,12 @@
+normalized_distance
+gaussian_distance
+bearing_angle
+bearing_sin
+bearing_cos
+pearson_correlation
+pearson_diff_correlation
+direction_correlation
+weighted_correlation
+lag_correlation
+variance_ratio
+mean_difference
