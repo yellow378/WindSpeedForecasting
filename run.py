@@ -10,6 +10,7 @@ from exp.exp_spatial_long_term_forecasting import Exp_Spatial_Long_Term_Forecast
 from utils.print_args import print_args
 import random
 import numpy as np
+import logging
 
 if __name__ == "__main__":
     fix_seed = 496496
@@ -52,8 +53,6 @@ if __name__ == "__main__":
         help="root path of the data file",
     )
     parser.add_argument("--data_path", type=str, default="ETTh1.csv", help="data file")
-    parser.add_argument("--edge_index",required=True, type=str, default=None, help="edge file for GAT")
-    parser.add_argument("--edge_attr",required=True, type=str, default=None, help="edge attr for GAT")
     parser.add_argument(
         "--features",
         type=str,
@@ -235,16 +234,26 @@ if __name__ == "__main__":
     parser.add_argument(
         "--individual", type=int, default=0, help="individual head; True 1 False 0"
     )
+
+
+    # GAT
+    parser.add_argument("--edge_index",required=True, type=str, default=None, help="edge file for GAT")
+    parser.add_argument("--edge_attr",required=True, type=str, default=None, help="edge attr for GAT")
+    parser.add_argument("--node_index",required=True, type=str, default=None, help="node index for GAT")
     parser.add_argument(
         "--n_nodes", type=int, default=134, help="number of nodes"
     )
     parser.add_argument(
-        "--static_edge_dim", type=int, default=0, help="edge feature dimension"
-    )
-    parser.add_argument(
         "--use_edge_features", action="store_true", help="use edge features"
     )
+
+    parser.add_argument('--debug', action='store_true', help='启用调试模式')
+
     args = parser.parse_args()
+    if args.debug:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
     args.use_gpu = True if torch.cuda.is_available() and args.use_gpu else False
 
     if args.use_gpu and args.use_multi_gpu:

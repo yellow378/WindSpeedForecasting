@@ -7,10 +7,11 @@ from sklearn.preprocessing import StandardScaler, MinMaxScaler
 import warnings
 import re
 import glob
-warnings.filterwarnings('ignore')
 from torch_geometric.data import Data, Batch
 from tqdm import tqdm
-print("Using PyTorch Geometric")
+import logging
+warnings.filterwarnings('ignore')
+
 
 
 class TimeSeriesGraphDataset(Dataset):
@@ -18,7 +19,9 @@ class TimeSeriesGraphDataset(Dataset):
     时间序列图数据集 - 支持PyTorch Geometric或自定义类
     """
     def __init__(self, data_dir, seq_len=432, pred_len=36, target_col='Wspd', 
-                 scaler_type='standard', edge_index='index.npy', edge_attr='attr.npy', flag='train', shared_scalers=None):
+                 scaler_type='standard', edge_index='edge_index.npy', 
+                 use_edge_features=True, edge_attr='attr.npy', node_index = "node_index.npy", 
+                 flag='train', file_pattern="dated_Turb*.csv", shared_scalers=None):
         """
         初始化数据集
         :param data_dir: 数据文件目录
@@ -27,10 +30,14 @@ class TimeSeriesGraphDataset(Dataset):
         :param target_col: 目标列名
         :param scaler_type: 标准化类型 ('standard', 'minmax', None)
         :param edge_index: 边index路径
+        :param use_edge_features: 是否使用边特征
         :param edge_attr: 边特征文件
+        :param node_index: 节点index文件
         :param flag: 数据集类型 ('train', 'val', 'test')
+        :param file_pattern: 文件过滤模式
         :param shared_scalers: 共享的scaler（用于val/test集）
         """
+        self.logger = logging.getLogger(self.__class__.__name__)
         self.data_dir = data_dir
         self.seq_len = seq_len
         self.pred_len = pred_len
@@ -38,26 +45,40 @@ class TimeSeriesGraphDataset(Dataset):
         self.scaler_type = scaler_type
         self.flag = flag
         self.shared_scalers = shared_scalers
-        
+        self.file_pattern = file_pattern
+
+        self.logger.info(f"初始化{flag}数据集: seq_len={seq_len}, pred_len={pred_len}, target_col={target_col}")
+        self.logger.info("开始加载边数据...")
+        self.edge_index = np.load(edge_index, allow_pickle=True)
+        self.node_index = np.load(node_index, allow_pickle=True)
+        if use_edge_features:
+            self.logger.debug("使用并加载边特征...")
+            self.edge_attr = np.load(edge_attr, allow_pickle=True)
+            self.static_edge_dim = self.edge_attr.shape[-1]
+            self.logger.debug(f"边特征shape:{edge_attr.shape}")
+
         """
         加载所有风机数据及预处理
-        NodeName: 0,1,2,3.....
         """
-        print(f"=================开始加载并处理所有数据:{data_dir}...{self.flag}=================")
+        self.logger.info(f"===========开始加载并处理所有数据:{data_dir}...{self.flag}=================")
         self.data_files = self._get_data_files()
+        self.logger.debug(f"加载了{len(self.data_files)} 个数据文件")
+        self.logger.debug(f"开始过滤节点:{self.node_index}")
+        #过滤节点
+        self.file_list = [self.file_pattern.replace('*', str(file_name)) for file_name in self.node_index+1]
+        self.data_files = [f for f in self.data_files if os.path.basename(f) in self.file_list]
+        self.logger.info(f"使用提供的 {len(self.file_list)} 个风速数据文件")
+        self.logger.debug(f"过滤后的文件为：{self.data_files}")
+
         self.raw_data = self._load_all_data()
         # 预处理数据， 包含正确处理scaler共享的逻辑
         self.processed_data, self.scalers = self._preprocess_data()
-        
-        print("开始加载边数据...")
-        self.edge_index = np.load(edge_index, allow_pickle=True)
-        self.edge_attr = np.load(edge_attr, allow_pickle=True)
 
-        print(f"开始创建样本索引：{flag}...")
+        self.logger.info(f"开始创建样本索引：{flag}...")
         # 创建样本索引
         self.samples = self._create_samples()
 
-        print(f"{flag.upper()} dataset initialized: {len(self.samples)} samples, {len(self.processed_data)} nodes")
+        self.logger.info(f"{flag.upper()} dataset initialized: {len(self.samples)} samples, {len(self.processed_data)} nodes")
         # 验证数据集的完整性
         self._validate_dataset()
         
@@ -81,7 +102,7 @@ class TimeSeriesGraphDataset(Dataset):
     
     def _get_data_files(self):
         """获取所有CSV数据文件"""
-        all_files = glob.glob(os.path.join(self.data_dir, "dated_*.csv"))
+        all_files = glob.glob(os.path.join(self.data_dir, self.file_pattern))
         # 按照文件名中的数字进行排序
         def extract_number(filename):
             match = re.search(r'dated_Turb(\d+)\.csv', os.path.basename(filename))
@@ -126,6 +147,9 @@ class TimeSeriesGraphDataset(Dataset):
                 
                 # 选择特征列（除了date列）
                 feature_cols = [col for col in df_filtered.columns if col != 'date']
+                # 将Target_col放到最后一列
+                feature_cols.remove(self.target_col)
+                feature_cols.append(self.target_col)
                 features = df_filtered[feature_cols].values
                 
                 # 处理NaN值
@@ -171,7 +195,8 @@ class TimeSeriesGraphDataset(Dataset):
                     'raw_features': features,
                     'columns': feature_cols,
                     'dates': df_filtered['date'].values if 'date' in df_filtered.columns else None
-                }             
+                }
+                self.logger.debug(f"columns: {feature_cols}")
             except Exception as e:
                 print(f"Error preprocessing {node_name}: {e}")
                 continue
@@ -206,6 +231,7 @@ class TimeSeriesGraphDataset(Dataset):
         """创建训练样本，按照flag进行7:2:1划分"""
         samples = []
         node_names = sorted(list(self.processed_data.keys()))
+        self.logger.debug(f"节点列表: {node_names}")
         
         if not node_names:
             raise ValueError("No valid data found")
@@ -270,17 +296,20 @@ class TimeSeriesGraphDataset(Dataset):
                 target_idx = data['columns'].index(self.target_col)
                 target_val = data['features'][sample['pred_start_idx']:sample['pred_end_idx'], target_idx]
             else:
-                # 如果没有目标列，使用第一列
-                target_val = data['features'][sample['pred_start_idx']:sample['pred_end_idx'], 0]
-            
+                # 如果没有目标列，使用最后一列
+                target_val = data['features'][sample['pred_start_idx']:sample['pred_end_idx'], -1]
+
             target_values.append(target_val)
         
         # 转换为tensor
         x = torch.FloatTensor(np.array(node_features))  # [n_nodes, seq_len, n_features]
         y = torch.FloatTensor(np.array(target_values))   # [n_nodes, pred_len]
-        edge_index = torch.LongTensor(np.array(self.edge_index))
-        edge_attr = torch.FloatTensor(np.array(self.compute_dynamic_edge_features(x,edge_index,self.edge_attr)))
         
+        # TODO: 计算index和attr
+        edge_index, edge_attr = self.compute_dynamic_edge_features(x,edge_index,self.edge_attr)
+        edge_index = torch.LongTensor(np.array(edge_index))
+        edge_attr = torch.FloatTensor(np.array(edge_attr))
+
         # 创建图数据对象
         graph_data = Data(
             x=x,
@@ -293,12 +322,13 @@ class TimeSeriesGraphDataset(Dataset):
 
     def compute_dynamic_edge_features(self, x, edge_index, static_edge_attr):
         """
-        batch_size_nnodes, seq_len, feature_dim = x.shape
-        num_edges = edge_index.shape[1]
+        nodes, seq_len, feature_dim = x.shape
+        目前 edge_index为全连接图
         
         # 根据数据集的实际特征列确定索引
-        # 从TimeSeriesGraphDataset可以看出特征列除了date外包含: Wspd, Wdir, Etmp, Itmp, Ndir, Pab1, Pab2, Pab3, Prtv, Patv
-        # 由于date列在预处理时被排除，所以特征顺序为: [Wspd, Wdir, Etmp, Itmp, Ndir, Pab1, Pab2, Pab3, Prtv, Patv]
+        # 从TimeSeriesGraphDataset可以看出特征列除了date外包含: Wdir, Etmp, Itmp, Ndir, Pab1, Pab2, Pab3, Prtv, Patv, Wspd
+        # 由于date列在预处理时被排除，所以特征顺序为: [Wdir, Etmp, Itmp, Ndir, Pab1, Pab2, Pab3, Prtv, Patv, Wspd]
+        
         动态边特征说明（总计13维）:
         1. wdir_diff_norm: 风向差异归一化
         2. wdir_consistency: 风向一致性（cos相似度）
@@ -328,13 +358,13 @@ class TimeSeriesGraphDataset(Dataset):
         n_nodes = self.n_nodes
 
         # 使用默认索引（基于常见的风电数据格式）
-        wspd_idx, wdir_idx = 0, 1  # 风速、风向
-        etmp_idx, itmp_idx = 2, 3  # 环境温度、内部温度
-        ndir_idx = 4  # 机舱方向
-        patv_idx = 9   # 有功功率（假设是第10列，索引9）
+        wspd_idx, wdir_idx = -1, 0  # 风速、风向
+        etmp_idx, itmp_idx = 1, 2  # 环境温度、内部温度
+        ndir_idx = 3  # 机舱方向
+        patv_idx = 8   # 有功功率
         
-        # 取最后一个时间步的特征用于计算动态边特征
-        current_features = x[:, -1, :].view(n_nodes, -1)   # [n_nodes, feature_dim]
+        # 取最后三个时间步的特征的平均值用于计算动态边特征
+        current_features = x[:, -3:, :].mean(dim=1).view(n_nodes, -1)   # [n_nodes, feature_dim]
         source_indices = edge_index[0]  # [batch_size,num_edges]
         target_indices = edge_index[1]  # [batch_size, num_edges]
         
@@ -379,13 +409,13 @@ class TimeSeriesGraphDataset(Dataset):
         # 平均风速等级
         avg_wspd = (source_wspd + target_wspd) / 2
         wspd_level = torch.clamp(avg_wspd / 25.0, 0, 1)
-        dynamic_features.append(wspd_level. unsqueeze(-1))
-        
-        # 从静态特征中提取距离和方向信息
-        euclidean_dist = static_edge_attr[:,  0]  # [num_edges]
-        bearing_angle = static_edge_attr[:,  4]   # [num_edges]
+        dynamic_features.append(wspd_level.unsqueeze(-1))
 
-        # 计算尾流影响强度
+        # 从静态特征中提取距离和方向信息
+        euclidean_dist = static_edge_attr[:, 0]  # [num_edges]
+        bearing_angle = static_edge_attr[:, 2]   # [num_edges] [-pi, pi]
+
+        # TODO: 计算尾流影响强度
         source_to_target_angle = bearing_angle
         wake_alignment = torch.cos(torch.deg2rad(source_wdir - source_to_target_angle))
         wake_alignment = torch.clamp(wake_alignment, 0, 1)
