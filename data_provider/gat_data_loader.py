@@ -552,7 +552,8 @@ def create_dataloader(args, flag):
         'scaler_type': "standard",
         'edge_index': args.edge_index,
         'edge_attr': args.edge_attr,
-        'flag': flag
+        'flag': flag,
+        'node_index': args.node_index,
     }
 
     # 处理scaler共享
