@@ -7,6 +7,7 @@ from exp.exp_short_term_forecasting import Exp_Short_Term_Forecast
 from exp.exp_anomaly_detection import Exp_Anomaly_Detection
 from exp.exp_classification import Exp_Classification
 from exp.exp_spatial_long_term_forecasting import Exp_Spatial_Long_Term_Forecast
+from exp.exp_lightst import Exp_LightST
 from utils.print_args import print_args
 import random
 import numpy as np
@@ -249,6 +250,17 @@ if __name__ == "__main__":
 
     parser.add_argument('--debug', action='store_true', help='启用调试模式')
 
+    # LightST
+    parser.add_argument("--n_clusters", type=int, default=8, help="聚类数量(三级参数共享)")
+    parser.add_argument("--n_sectors", type=int, default=16, help="风向扇区数量")
+    parser.add_argument("--gnn_layers", type=int, default=2, help="E-MGAT层数 L_g")
+    parser.add_argument("--static_graph_dir", type=str, default=None, help="预计算静态图目录")
+    parser.add_argument("--positions_path", type=str, default=None, help="风机坐标文件路径")
+    parser.add_argument("--stage1_epochs", type=int, default=15, help="阶段1训练轮数(时序)")
+    parser.add_argument("--stage2_epochs", type=int, default=15, help="阶段2训练轮数(图学习)")
+    parser.add_argument("--stage3_epochs", type=int, default=10, help="阶段3训练轮数(联合微调)")
+    parser.add_argument("--cluster_update_interval", type=int, default=5, help="聚类更新间隔(轮)")
+
     args = parser.parse_args()
     if args.debug:
         logging.basicConfig(level=logging.DEBUG)
@@ -277,6 +289,8 @@ if __name__ == "__main__":
         Exp = Exp_Classification
     elif args.task_name == "spatial":
         Exp = Exp_Spatial_Long_Term_Forecast
+    elif args.task_name == "lightst":
+        Exp = Exp_LightST
     else:
         Exp = Exp_Long_Term_Forecast
 

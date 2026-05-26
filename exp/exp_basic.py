@@ -2,7 +2,7 @@ import os
 import torch
 from models import Autoformer, Transformer, TimesNet, Nonstationary_Transformer, DLinear, FEDformer, \
     Informer, LightTS, Reformer, ETSformer, Pyraformer, PatchTST, MICN, Crossformer, FiLM, iTransformer, \
-    Koopa, TiDE, LightTime, SegRNN, SparseTSF, DLinearSingle, GAT
+    Koopa, TiDE, LightTime, SegRNN, SparseTSF, DLinearSingle, GAT, LightST
 
 
 class Exp_Basic(object):
@@ -31,7 +31,8 @@ class Exp_Basic(object):
             'DLinearSingle': DLinearSingle,
             'SegRNN': SegRNN,
             'SparseTSF': SparseTSF,
-            "GAT": GAT
+            "GAT": GAT,
+            "LightST": LightST
         }
         self.device = self._acquire_device()
         self.model = self._build_model().to(self.device)
